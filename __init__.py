@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 import shutil
 
-from calibre.devices.interface import DevicePlugin, BookList
+from calibre.devices.usbms.driver import USBMS, BookList
 from calibre.utils.filenames import ascii_text
 from calibre.utils.config import JSONConfig
 from calibre.utils.logging import default_log
@@ -74,12 +74,13 @@ class AnxBookMetadata:
         self.tags = tags if tags is not None else []
         self.cover_path = cover_path
         self.file_md5 = file_md5
+        self.device_collections = [] # Add device_collections attribute
 
     def __repr__(self):
         return f"AnxBookMetadata(title='{self.title}', uuid='{self.uuid}')"
 
 
-class AnxDevicePlugin(DevicePlugin):
+class AnxDevicePlugin(USBMS): # Change base class to USBMS
     name                = 'ANX Virtual Device'
 #    gui_name            = 'ANX Device'
     gui_name = _('ANX Device')
@@ -91,13 +92,19 @@ class AnxDevicePlugin(DevicePlugin):
     capabilities        = frozenset(['send_books', 'delete_books', 'card_a_from_b', 'has_user_manual'])
     MANAGES_DEVICE_PRESENCE = True # Set to True as per Remarkable plugin
     ASK_TO_ALLOW_CONNECT = True # Enable user approval for connection
-    
+
+    # Add dummy USB IDs to simulate a USB device
+    VENDOR_ID = [0xAAAA] # Use a unique dummy Vendor ID
+    PRODUCT_ID = [0xBBBB] # Use a unique dummy Product ID
+    BCD = [0xCCCC] # Use a unique dummy BCD
+
     config_spec = JSONConfig('plugins/anx_device_plugin')
     config_spec.defaults['device_path'] = ''
     config_spec.defaults['blacklisted_devices'] = {} # Initialize blacklisted devices
 
     def __init__(self, plugin_path):
-        DevicePlugin.__init__(self, plugin_path)
+        # Initialize USBMS with a dummy path for now, actual path set in apply_settings
+        super().__init__(plugin_path) # Call USBMS's __init__ or DevicePlugin's __init__
         self.gui = None
         self.settings = prefs
         self.log = default_log
@@ -112,6 +119,11 @@ class AnxDevicePlugin(DevicePlugin):
         self.seen_device = False # Added for managed device presence
         self.books_in_device = {}
         self.booklist = AnxBookList()
+        # USBMS specific properties, ensure they are initialized
+        self._main_prefix = ''
+        self._card_a_prefix = None
+        self._card_b_prefix = None
+        self.is_connected = False
 
     def load_actual_plugin(self, gui):
         self.gui = gui
@@ -138,10 +150,15 @@ class AnxDevicePlugin(DevicePlugin):
             if self.connected:
                 self.log.info(f"ANX Device re-configured and connected to: {self.base_dir}")
                 self.load_books_from_device()
+                # Update USBMS internal state
+                self._main_prefix = self.base_dir + os.sep if not self.base_dir.endswith(os.sep) else self.base_dir
+                self.is_connected = True
             else:
                 self.log.warning(f"ANX Device re-configured but not connected. Check path: {self.base_dir}")
+                self.is_connected = False # Ensure USBMS state is updated
         else:
             self.log.info("ANX Device path not configured after saving. Please configure it in preferences.")
+            self.is_connected = False # Ensure USBMS state is updated
 
     def get_gui_name(self):
         return self.gui_name
@@ -152,15 +169,30 @@ class AnxDevicePlugin(DevicePlugin):
     def startup(self):
         self.apply_settings()
 
-    def open(self, connected_device, library_uuid):
-        self.log.info(f"ANX Device: open method called for {connected_device}")
-        self.connected = True
-
     def is_usb_connected(self, devices_on_system, debug=False,
             only_presence=False):
-        # We manage device presence ourselves, so this method should always
-        # return False
-        return True
+        # Override USBMS's is_usb_connected to report our connection status
+        # This is crucial for Calibre GUI to detect the device
+        self.log.info(f"ANX Device: is_usb_connected called. Returning {self.is_connected}, {self}")
+        return self.is_connected, self
+
+    def open(self, connected_device, library_uuid):
+        self.log.info(f"ANX Device: open method called for {connected_device}")
+        # Ensure base_dir is set if it wasn't already (e.g., from managed detection)
+        if not self.base_dir and isinstance(connected_device, str) and connected_device.startswith(FAKE_DEVICE_SERIAL):
+            self.base_dir = connected_device.replace(FAKE_DEVICE_SERIAL, '')
+            self.db_path = os.path.join(self.base_dir, 'database7.db')
+            self.file_dir = os.path.join(self.base_dir, 'data', 'file')
+            self.cover_dir = os.path.join(self.base_dir, 'data', 'cover')
+            # Also update USBMS internal path
+            self._main_prefix = self.base_dir + os.sep if not self.base_dir.endswith(os.sep) else self.base_dir
+
+        self.connected = True
+        self.is_connected = True # Update USBMS internal state
+        self.current_library_uuid = library_uuid # USBMS expects this
+        self.load_books_from_device() # Load books when opened
+        return True # Indicate successful open
+
         
     def is_connect_to_this_device(self, opts=None):
         if not self.base_dir:
@@ -212,7 +244,7 @@ class AnxDevicePlugin(DevicePlugin):
                     format_map={os.path.splitext(full_file_path)[1].lstrip('.').upper(): file_size},
                     device_id=self.uuid,
                     size=file_size,
-                    datetime=file_mtime,
+                    datetime=file_mtime.timetuple()[:6], # Convert datetime object to a tuple (year, month, day, hour, minute, second)
                     thumbnail=open(full_cover_path, 'rb').read() if full_cover_path and os.path.exists(full_cover_path) else None, # Fill thumbnail with cover image data
                     tags=[],
                     cover_path=cover_path_rel,
@@ -273,7 +305,7 @@ class AnxDevicePlugin(DevicePlugin):
     def set_progress_reporter(self, report_progress):
         self.report_progress_callback = report_progress
 
-    def get_device_information(self):
+    def get_device_information(self, end_session=True): # Add end_session parameter
         # Returns (device name, device version, software version on device, MIME type, drive information dictionary (optional))
         # For a folder based device, device version can be a placeholder.
         # Software version can also be a placeholder.
@@ -671,7 +703,7 @@ class AnxDevicePlugin(DevicePlugin):
         self.report_progress(1.0, 'Finished sending books.')
         return (locations, None, None)
 
-    def books(self, oncard=None):
+    def books(self, oncard=None, end_session=True): # Add end_session parameter
         return self.booklist
 
     def get_device_uid(self):
