@@ -11,6 +11,7 @@ from calibre.utils.config import JSONConfig
 from calibre.utils.logging import default_log
 from PyQt5.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget
 from calibre.devices.usbms.books import Book as USBMSBook, CollectionsBookList # Import Book as USBMSBook and CollectionsBookList
+from calibre.library import db # Import calibre.library.db
 
 # Import the custom ConfigWidget and preferences object
 from .config import ConfigWidget, prefs
@@ -225,8 +226,6 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 else:
                     book.thumbnail = None
 
-                # Add to USBMS's internal books_in_device and booklist
-                default_log.info(f"ANX Device: load_books_from_device - Book UUID before adding to device: {book.uuid}")
                 self.books_in_device[book.uuid] = book
                 self.booklist.add_book(book, None) # Use USBMS's BookList.add_book method (which handles duplicates)
                 
@@ -308,9 +307,11 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 self.report_progress(float(i) / total_books, f'Sending book {i+1} of {total_books}')
                 
                 # Get Calibre's Metadata object for the current book
-                db = self.gui.current_db
+                # Get Calibre's Metadata object for the current book
+                calibre_db = db().new_api # Use db().new_api to access the Calibre database API directly
                 # Get full metadata including cover_data
-                current_metadata = db.get_metadata(book_id, get_cover=True, get_user_manual=False)
+                current_metadata = calibre_db.get_metadata(book_id, get_cover=True)
+                self.log.debug(f"ANX Device: send_books - current_metadata.cover_data: {current_metadata.cover_data}")
                 
                 title = current_metadata.title if current_metadata.title else os.path.splitext(os.path.basename(src_path))[0]
                 author = current_metadata.authors[0] if current_metadata.authors else "Unknown"
@@ -335,28 +336,31 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 file_md5_val = hashlib.md5(open(dest_file_path, 'rb').read()).hexdigest()
 
                 cover_path_abs = ""
-                # Use cover_data from the Metadata object to get the format
-                if current_metadata.cover_data and current_metadata.cover_data[1]:
-                    cover_format = current_metadata.cover_data[0].lower() # e.g., 'jpeg', 'png'
-                    cover_extension = '.jpg' # Default to jpg
-                    if cover_format in ['jpeg', 'jpg']:
-                        cover_extension = '.jpg'
-                    elif cover_format == 'png':
-                        cover_extension = '.png'
-                    elif cover_format == 'gif':
-                        cover_extension = '.gif'
+                # Get cover path from Calibre DB using metadata.get('cover') and calibre_db.field_for('path')
+                cover_rel_path = current_metadata.get('cover')
+                if cover_rel_path:
+                    book_library_path = calibre_db.field_for('path', book_id)
+                    calibre_cover_path = os.path.join(book_library_path, cover_rel_path)
+                    self.log.debug(f"ANX Device: send_books - calibre_cover_path from metadata: {calibre_cover_path}")
+                    if os.path.exists(calibre_cover_path):
+                        # Determine cover format from the extension of the Calibre cover path
+                        cover_extension = os.path.splitext(calibre_cover_path)[1].lower()
+                        if not cover_extension:
+                            cover_extension = '.jpg' # Default if no extension found
 
-                    cover_filename = f"{sanitized_title} - {sanitized_author}{cover_extension}"
-                    cover_path_abs = os.path.join(self.cover_dir, cover_filename)
-                    try:
-                        with open(cover_path_abs, 'wb') as f:
-                            f.write(current_metadata.cover_data[1])
-                        self.log.debug(f"Copied cover to {cover_path_abs} with format {cover_format}.")
-                    except Exception as ce:
-                        self.log.error(f"Error copying cover data to {cover_path_abs}: {ce}")
-                        cover_path_abs = "" # Reset cover_path_abs if copy fails
+                        cover_filename = f"{sanitized_title} - {sanitized_author}{cover_extension}"
+                        dest_cover_path = os.path.join(self.cover_dir, cover_filename)
+                        try:
+                            shutil.copyfile(calibre_cover_path, dest_cover_path)
+                            cover_path_abs = dest_cover_path
+                            self.log.debug(f"Copied cover from {calibre_cover_path} to {cover_path_abs}.")
+                        except Exception as ce:
+                            self.log.error(f"Error copying cover file from {calibre_cover_path} to {cover_path_abs}: {ce}")
+                            cover_path_abs = "" # Reset cover_path_abs if copy fails
+                    else:
+                        self.log.warning(f"No valid cover file found at {calibre_cover_path} for book {title}.")
                 else:
-                    self.log.warning(f"No cover data found for book {title}.")
+                    self.log.warning(f"No cover path found in metadata for book {title}.")
 
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
@@ -432,7 +436,6 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 else:
                     book.thumbnail = None
 
-                default_log.debug(f"ANX Device: send_books - Book UUID before adding to device: {book.uuid}")
                 self.books_in_device[book.uuid] = book
                 self.booklist.add_book(book, None) # Add to USBMS's BookList immediately
 
@@ -650,6 +653,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 self.report_progress(float(i) / total_books, f'Sending book {i+1} of {total_books}')
                 
                 book_data = metadata[i]
+                self.log.debug(f"ANX Device: upload_books - book_data.cover_data: {book_data.cover_data}")
                 
                 title = book_data.title if book_data.title else os.path.splitext(os.path.basename(src_path))[0]
                 author = book_data.authors[0] if book_data.authors else "Unknown"
@@ -663,29 +667,79 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 # Ensure the filename is based on sanitized title and author
                 filename = f"{sanitized_title} - {sanitized_author}.{fmt}"
                 dest_file_path = os.path.join(self.file_dir, filename)
-
+                
                 os.makedirs(self.file_dir, exist_ok=True)
                 os.makedirs(self.cover_dir, exist_ok=True)
-
+                
                 shutil.copyfile(src_path, dest_file_path)
                 self.log.debug(f"Copied ebook from {src_path} to {dest_file_path}")
-
-                file_md5 = hashlib.md5(open(dest_file_path, 'rb').read()).hexdigest()
-
-                cover_path_rel = ""
-                # Ensure cover filename is based on sanitized title and author
-                cover_filename = f"{sanitized_title} - {sanitized_author}.jpg"
-                dest_cover_path = os.path.join(self.cover_dir, cover_filename)
                 
-                cover_data = book_data.cover_data[0] if book_data.cover_data else None
-                if cover_data:
-                    with open(dest_cover_path, 'wb') as f:
-                        f.write(cover_data[1])
-                    cover_path_rel = os.path.relpath(dest_cover_path, self.base_dir)
-                    self.log.debug(f"Copied cover to {dest_cover_path}")
-                else:
-                    self.log.warning(f"No cover found for book {title}") # Keep as warning
+                file_md5 = hashlib.md5(open(dest_file_path, 'rb').read()).hexdigest()
+                
+                cover_path_rel = ""
+                dest_cover_path = "" # Initialize dest_cover_path
+                # Ensure cover filename is based on sanitized title and author
+                
+                full_cover_data = book_data.cover_data # This should be (format, data) tuple
+                cover_data_to_write = None
+                cover_extension = '.jpg' # Default extension
 
+                if full_cover_data and full_cover_data[1]:
+                    # If cover data is directly available from metadata
+                    cover_data_to_write = full_cover_data[1]
+                    cover_format = full_cover_data[0].lower() if full_cover_data[0] else 'jpeg'
+                    if cover_format == 'png':
+                        cover_extension = '.png'
+                    elif cover_format == 'gif':
+                        cover_extension = '.gif'
+                    self.log.debug(f"ANX Device: upload_books - Using cover data from book_data.cover_data.")
+                else:
+                    # Try to get cover path from Calibre DB using book_data.id
+                    calibre_db = db().new_api # Use db().new_api to access the Calibre database API directly
+                    self.log.debug(f"ANX Device: upload_books - book_data.id: {book_data.id}, calibre_db: {calibre_db}")
+                    
+                    # Get full metadata including cover_data
+                    # Note: book_data.id is the Calibre library ID for the book being uploaded
+                    current_metadata = calibre_db.get_metadata(book_data.id, get_cover=True)
+                    cover_rel_path = current_metadata.get('cover')
+                    
+                    if cover_rel_path:
+                        book_library_path = calibre_db.field_for('path', book_data.id)
+                        calibre_cover_path = os.path.join(book_library_path, cover_rel_path)
+                        self.log.debug(f"ANX Device: upload_books - calibre_cover_path from metadata: {calibre_cover_path}")
+
+                        if os.path.exists(calibre_cover_path):
+                            try:
+                                with open(calibre_cover_path, 'rb') as f:
+                                    cover_data_to_write = f.read()
+                                cover_extension = os.path.splitext(calibre_cover_path)[1].lower()
+                                self.log.debug(f"ANX Device: upload_books - Successfully read cover from {calibre_cover_path}.")
+                            except Exception as e:
+                                self.log.error(f"ANX Device: Error reading cover from {calibre_cover_path}: {e}")
+                                cover_data_to_write = None
+                        else:
+                            self.log.warning(f"ANX Device: No valid cover file found at {calibre_cover_path} for book {title} in Calibre DB.")
+                    else:
+                        self.log.warning(f"ANX Device: No cover path found in metadata for book {title} in Calibre DB.")
+
+                if cover_data_to_write:
+                    cover_filename = f"{sanitized_title} - {sanitized_author}{cover_extension}"
+                    dest_cover_path = os.path.join(self.cover_dir, cover_filename)
+                    
+                    try:
+                        with open(dest_cover_path, 'wb') as f:
+                            f.write(cover_data_to_write)
+                        cover_path_rel = os.path.relpath(dest_cover_path, self.base_dir)
+                        self.log.debug(f"Copied cover to {dest_cover_path}")
+                    except Exception as ce:
+                        self.log.error(f"Error copying cover data to {dest_cover_path}: {ce}")
+                        cover_path_rel = "" # Reset cover_path_rel if copy fails
+                        dest_cover_path = "" # Reset dest_cover_path if copy fails
+                else:
+                    self.log.warning(f"No cover data available to write for book {title}.")
+                    cover_path_rel = ""
+                    dest_cover_path = ""
+                
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 current_time = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
