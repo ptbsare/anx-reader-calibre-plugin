@@ -67,10 +67,10 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         self.seen_device = False # Added for managed device presence
         self.books_in_device = {} # Manually initialize books_in_device
         # Use CollectionsBookList as it handles collections and is preferred
-        self._main_prefix = None
+        self._main_prefix = prefs['device_path'] + os.sep if prefs['device_path'] else None
         self._card_a_prefix = None
         self._card_b_prefix = None
-        self.booklist = CollectionsBookList(prefix=self._main_prefix, settings=None, oncard=None) # Pass required prefix and settings
+        self.booklist = CollectionsBookList(prefix=self._main_prefix, settings=None, oncard=None)
         self.is_connected = False
 
     def load_actual_plugin(self, gui):
@@ -129,6 +129,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             self.load_books_from_device()
             # Update USBMS internal state
             self._main_prefix = self.base_dir + os.sep if not self.base_dir.endswith(os.sep) else self.base_dir
+            self.booklist.prefix = self._main_prefix # Update booklist's prefix
             self.is_connected = True
         else:
             self.log.warning(f"ANX Device re-configured but not connected. Check path and database: {self.base_dir}")
