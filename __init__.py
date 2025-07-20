@@ -37,7 +37,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
     FORMATS             = ["epub", "mobi", "azw3", "fb2", "txt", "pdf"]
     MANAGES_DEVICE_PRESENCE = True # Set to True as per Remarkable plugin
     ASK_TO_ALLOW_CONNECT = True # Enable user approval for connection
-    CAN_SET_METADATA = ['title', 'authors', 'collections']
+    CAN_SET_METADATA = ['title', 'authors', 'collections', 'user_metadata']
     # Add dummy USB IDs to simulate a USB device
     VENDOR_ID = [0xAAAA] # Use a unique dummy Vendor ID
     PRODUCT_ID = [0xBBBB] # Use a unique dummy Product ID
@@ -538,36 +538,76 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 cursor = conn.cursor()
                 current_time = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
                 
-                # Retrieve current metadata from DB to check for changes
-                cursor.execute("SELECT title, author FROM tb_books WHERE id = ?;", (anx_db_id,))
-                db_title, db_author = cursor.fetchone()
+                # Retrieve current metadata from DB to check for changes for all relevant fields
+                cursor.execute("""
+                    SELECT title, author, cover_path, file_path, file_md5,
+                           create_time, update_time, last_read_position,
+                           reading_percentage, is_deleted, rating, group_id, description
+                    FROM tb_books WHERE id = ?;
+                """, (anx_db_id,))
                 
-                # Check for changes in title and authors
-                title_changed = False
+                db_data = cursor.fetchone()
+                if not db_data:
+                    self.log.warning(f"ANX Device: sync_booklists - Book with ANX DB ID {anx_db_id} not found in database. Skipping metadata update.")
+                    continue
+
+                (db_title, db_author, db_cover_path, db_file_path, db_file_md5,
+                 db_create_time, db_update_time, db_last_read_position,
+                 db_reading_percentage, db_is_deleted, db_rating, db_group_id, db_description) = db_data
+                
+                update_fields = []
+                update_values = []
+                
+                # Compare and update title
                 if book_obj.title != db_title:
-                    title_changed = True
+                    update_fields.append("title = ?")
+                    update_values.append(book_obj.title)
+                    self.log.debug(f"ANX Device: sync_booklists - Title changed for book ID {anx_db_id}: '{db_title}' -> '{book_obj.title}'")
                 
-                authors_changed = False
-                # Assuming single author for simplicity, compare first author
+                # Compare and update author
                 current_author_in_book = book_obj.authors[0] if book_obj.authors else ''
                 if current_author_in_book != db_author:
-                    authors_changed = True
+                    update_fields.append("author = ?")
+                    update_values.append(current_author_in_book)
+                    self.log.debug(f"ANX Device: sync_booklists - Author changed for book ID {anx_db_id}: '{db_author}' -> '{current_author_in_book}'")
 
-                if title_changed or authors_changed:
-                    update_fields = []
-                    update_values = []
+                # Compare and update other extended attributes from user_metadata
+                fields_to_check = {
+                    '#anx_cover_path': ('cover_path', db_cover_path, 'text'),
+                    '#anx_file_path': ('file_path', db_file_path, 'text'), # file_path is not usually editable by user directly, but for completeness
+                    '#anx_file_md5': ('file_md5', db_file_md5, 'text'), # file_md5 is not editable
+                    '#anx_create_time': ('create_time', db_create_time, 'datetime'),
+                    '#anx_last_read_position': ('last_read_position', db_last_read_position, 'text'),
+                    '#anx_reading_percentage': ('reading_percentage', db_reading_percentage, 'float'),
+                    '#anx_rating': ('rating', db_rating, 'float'),
+                    '#anx_group_id': ('group_id', db_group_id, 'int'),
+                    '#anx_description': ('description', db_description, 'text'),
+                }
+
+                for user_meta_key, (db_field_name, db_current_value, data_type) in fields_to_check.items():
+                    user_meta_val_raw = book_obj.get_user_metadata(user_meta_key, make_copy=False)
+                    user_meta_val = user_meta_val_raw.get('#value#') if isinstance(user_meta_val_raw, dict) else None
                     
-                    if title_changed:
-                        update_fields.append("title = ?")
-                        update_values.append(book_obj.title)
-                        self.log.debug(f"ANX Device: sync_booklists - Title changed for book ID {anx_db_id}: '{db_title}' -> '{book_obj.title}'")
-                    if authors_changed:
-                        update_fields.append("author = ?")
-                        update_values.append(current_author_in_book)
-                        self.log.debug(f"ANX Device: sync_booklists - Author changed for book ID {anx_db_id}: '{db_author}' -> '{current_author_in_book}'")
+                    # Type conversion for comparison
+                    if data_type == 'float' and user_meta_val is not None:
+                        try:
+                            user_meta_val = float(user_meta_val)
+                        except (ValueError, TypeError):
+                            user_meta_val = 0.0 # Default if conversion fails
+                    elif data_type == 'int' and user_meta_val is not None:
+                        try:
+                            user_meta_val = int(user_meta_val)
+                        except (ValueError, TypeError):
+                            user_meta_val = 0 # Default if conversion fails
                     
+                    if user_meta_val != db_current_value:
+                        update_fields.append(f"{db_field_name} = ?")
+                        update_values.append(user_meta_val)
+                        self.log.debug(f"ANX Device: sync_booklists - {db_field_name} changed for book ID {anx_db_id}: '{db_current_value}' -> '{user_meta_val}'")
+
+                if update_fields:
                     update_fields.append("update_time = ?")
-                    update_values.append(current_time)
+                    update_values.append(current_time) # Update update_time on any change
                     
                     sql_update = f"UPDATE tb_books SET {', '.join(update_fields)} WHERE id = ?;"
                     update_values.append(anx_db_id)
