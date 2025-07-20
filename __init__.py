@@ -262,7 +262,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 SELECT id, title, author, file_path, cover_path, file_md5,
                        create_time, update_time, last_read_position,
                        reading_percentage, is_deleted, rating, group_id, description
-                FROM tb_books WHERE is_deleted = 0;
+                FROM tb_books ;
             """)
             
             for row in cursor.fetchall():
@@ -272,8 +272,12 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 
                 self.log.debug(f"ANX Device: load_books_from_device - book_id: {book_id}, cover_path_rel from DB: {cover_path_rel}")
                 
-                full_file_path = os.path.join(self.file_dir, os.path.basename(file_path_rel))
-                full_cover_path = os.path.join(self.cover_dir, os.path.basename(cover_path_rel)) if cover_path_rel else None
+                # Normalize paths from DB to current OS path style before joining
+                normalized_file_path_rel = os.path.normpath(file_path_rel)
+                normalized_cover_path_rel = os.path.normpath(cover_path_rel) if cover_path_rel else None
+
+                full_file_path = os.path.join(self.base_dir, 'data', normalized_file_path_rel)
+                full_cover_path = os.path.join(self.base_dir, 'data', normalized_cover_path_rel) if normalized_cover_path_rel else None
 
                 file_size = os.path.getsize(full_file_path) if os.path.exists(full_file_path) else 0
                 file_mtime = datetime.fromtimestamp(os.path.getmtime(full_file_path)) if os.path.exists(full_file_path) else datetime.utcnow()
@@ -296,13 +300,13 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 # Store ANX specific metadata as user_metadata, including all extended attributes
                 book.set_user_metadata('#anx_db_id', {'datatype': 'int', 'is_multiple': False, '#value#': book_id})
                 book.set_user_metadata('#anx_file_path', {'datatype': 'text', 'is_multiple': False, '#value#': file_path_rel or ''})
-                book.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': full_cover_path or ''})
+                book.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': cover_path_rel or ''})
                 book.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ''})
                 book.set_user_metadata('#anx_create_time', {'datatype': 'datetime', 'is_multiple': False, '#value#': create_time or ''})
                 book.set_user_metadata('#anx_update_time', {'datatype': 'datetime', 'is_multiple': False, '#value#': update_time or ''})
                 book.set_user_metadata('#anx_last_read_position', {'datatype': 'text', 'is_multiple': False, '#value#': last_read_position or ''})
                 book.set_user_metadata('#anx_reading_percentage', {'datatype': 'float', 'is_multiple': False, '#value#': reading_percentage or 0.0})
-                book.set_user_metadata('#anx_is_deleted', {'datatype': 'int', 'is_multiple': False, '#value#': is_deleted or 0})
+                book.set_user_metadata('#anx_is_deleted', {'datatype': 'int', 'is_multiple': False, '#value#': is_deleted or 1})
                 book.set_user_metadata('#anx_rating', {'datatype': 'float', 'is_multiple': False, '#value#': rating or 0.0})
                 book.set_user_metadata('#anx_group_id', {'datatype': 'int', 'is_multiple': False, '#value#': group_id or 0})
                 book.set_user_metadata('#anx_description', {'datatype': 'text', 'is_multiple': False, '#value#': description or ''})
@@ -825,7 +829,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     try:
                         with open(dest_cover_path, 'wb') as f:
                             f.write(cover_data_to_write)
-                        cover_path_rel = os.path.relpath(dest_cover_path, self.base_dir)
+                        cover_path_rel = os.path.relpath(dest_cover_path, os.path.join(self.base_dir, 'data')).replace(os.sep, '/')
                         self.log.debug(f"Copied cover to {dest_cover_path}")
                     except Exception as ce:
                         self.log.error(f"Error copying cover data to {dest_cover_path}: {ce}")
@@ -848,15 +852,15 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     conn.close()
                     continue
                 
-                file_relative_path = os.path.relpath(dest_file_path, self.base_dir)
-
+                file_relative_path = os.path.relpath(dest_file_path, os.path.join(self.base_dir, 'data')).replace(os.sep, '/')
+                
                 # Extract extended attributes from book_data
                 # Provide default values if attributes are not present in book_data
                 create_time = book_data.get('create_time', current_time)
                 update_time = book_data.get('update_time', current_time)
                 last_read_position = book_data.get('last_read_position', '')
                 reading_percentage = book_data.get('reading_percentage', 0.0)
-                # is_deleted is always 0 for new books
+                is_deleted = book_data.get('is_deleted', 0)
                 rating = book_data.get('rating', 0.0)
                 group_id = book_data.get('group_id', 0)
                 description = book_data.get('description', '')
@@ -875,7 +879,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     file_md5,
                     last_read_position,
                     reading_percentage,
-                    0, # is_deleted is 0 for new books
+                    is_deleted,
                     rating,
                     group_id,
                     description
@@ -907,7 +911,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 book.set_user_metadata('#anx_update_time', {'datatype': 'datetime', 'is_multiple': False, '#value#': update_time or ''})
                 book.set_user_metadata('#anx_last_read_position', {'datatype': 'text', 'is_multiple': False, '#value#': last_read_position or ''})
                 book.set_user_metadata('#anx_reading_percentage', {'datatype': 'float', 'is_multiple': False, '#value#': reading_percentage or 0.0})
-                book.set_user_metadata('#anx_is_deleted', {'datatype': 'int', 'is_multiple': False, '#value#': 0}) # Always 0 for new books
+                book.set_user_metadata('#anx_is_deleted', {'datatype': 'int', 'is_multiple': False, '#value#': 1})
                 book.set_user_metadata('#anx_rating', {'datatype': 'float', 'is_multiple': False, '#value#': rating or 0.0})
                 book.set_user_metadata('#anx_group_id', {'datatype': 'int', 'is_multiple': False, '#value#': group_id or 0})
                 book.set_user_metadata('#anx_description', {'datatype': 'text', 'is_multiple': False, '#value#': description or ''})
