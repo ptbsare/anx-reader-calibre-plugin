@@ -192,6 +192,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     lpath=lpath,
                     size=file_size,
                 )
+                book.uuid = str(uuid.uuid4()) # Manually generate UUID
                 book.datetime = file_mtime.timetuple()[:6] # Set datetime attribute as a time tuple
                 book.is_dir = False # Set is_dir attribute after creation
                 book.is_readonly = True # Set is_readonly attribute after creation
@@ -204,7 +205,9 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 # Populate standard Book attributes from DB
                 book.title = title
                 book.authors = [author] if author else [_('Unknown')]
-                book.uuid = f"anx_book_{book_id}" # Calibre expects a UUID for each book
+                # Calibre will assign a UUID. We will use user_metadata for our internal ID.
+                # book.uuid = f"anx_book_{book_id}" # Removed manual UUID setting
+                # default_log.info(f"ANX Device: load_books_from_device - Set book.uuid to: {book.uuid}") # Removed log
                 book.has_cover = True if full_cover_path and os.path.exists(full_cover_path) else False
                 book.format_map = {os.path.splitext(full_file_path)[1].lstrip('.').upper(): file_size}
                 book.device_id = self.uuid
@@ -223,6 +226,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     book.thumbnail = None
 
                 # Add to USBMS's internal books_in_device and booklist
+                default_log.info(f"ANX Device: load_books_from_device - Book UUID before adding to device: {book.uuid}")
                 self.books_in_device[book.uuid] = book
                 self.booklist.add_book(book, None) # Use USBMS's BookList.add_book method (which handles duplicates)
                 
@@ -396,6 +400,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     lpath=lpath,
                     size=file_size,
                 )
+                book.uuid = str(uuid.uuid4()) # Manually generate UUID
                 book.datetime = datetime.utcnow().timetuple()[:6] # Set datetime attribute as a time tuple
                 book.is_dir = False # Set is_dir attribute after creation
                 book.is_readonly = True # Set is_readonly attribute after creation
@@ -408,7 +413,9 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 # Populate standard Book attributes
                 book.title = title
                 book.authors = [author]
-                book.uuid = f"anx_book_{book_id_from_db}" # Calibre expects a UUID for each book
+                # Calibre will assign a UUID. We will use user_metadata for our internal ID.
+                # book.uuid = f"anx_book_{book_id_from_db}" # Removed manual UUID setting
+                # default_log.debug(f"ANX Device: send_books - Set book.uuid to: {book.uuid}") # Removed log
                 book.has_cover = True if cover_path_abs else False
                 book.format_map = {fmt.upper(): file_size}
                 book.device_id = self.uuid
@@ -425,6 +432,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 else:
                     book.thumbnail = None
 
+                default_log.debug(f"ANX Device: send_books - Book UUID before adding to device: {book.uuid}")
                 self.books_in_device[book.uuid] = book
                 self.booklist.add_book(book, None) # Add to USBMS's BookList immediately
 
@@ -456,9 +464,10 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         self.log.debug(f"ANX Device: Current books in device cache (UUIDs): {[b.uuid for b in self.booklist]}")
 
         # Build a temporary map for efficient lookup based on UUID or normalized path
-        temp_book_map = {b.uuid: b for b in self.booklist}
-        for b in self.booklist:
-            temp_book_map[os.path.normpath(b.path)] = b
+        temp_book_map = {}
+        for book_obj in self.books_in_device.values(): # Iterate over values (USBMSBook objects)
+            temp_book_map[book_obj.uuid] = book_obj # Map Calibre's UUID to the book object
+            temp_book_map[os.path.normpath(book_obj.path)] = book_obj # Map normalized path to the book object
 
         for item_to_delete in book_ids:
             self.log.debug(f"ANX Device: Attempting to delete item: {item_to_delete}")
@@ -612,23 +621,15 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         
         to_remove_uuids = []
         for p in paths:
-            # Try to find by UUID first
-            if p.startswith('anx_book_'):
-                to_remove_uuids.append(p)
-            elif ':' in p: # Handle cases like 'card:/uuid'
-                parts = p.split(':')
-                if len(parts) > 1 and parts[1].startswith('anx_book_'):
-                    to_remove_uuids.append(parts[1])
-            else: # Assume it's a path, try to find corresponding book
-                # Iterate through the actual BookList provided by USBMS
-                for book in usbms_booklist:
-                    # For USBMS.Book, the path is absolute (prefix + lpath)
-                    # Need to compare full paths for accuracy
-                    full_book_path_from_usbms = os.path.normpath(os.path.join(book.prefix, book.lpath))
-                    if full_book_path_from_usbms == os.path.normpath(p):
-                        to_remove_uuids.append(book.uuid)
-                        break
+            default_log.debug(f"ANX Device: remove_books_from_metadata - Processing path/uuid: {p}")
+            if p is None: # Add check for None
+                default_log.debug(f"ANX Device: remove_books_from_metadata - Skipping None path/uuid.")
+                continue
+            # Directly add the UUID to the list of UUIDs to remove, as per user's instruction
+            to_remove_uuids.append(p)
+        
         # Rebuild the booklist without the removed books
+        default_log.debug(f"ANX Device: remove_books_from_metadata - UUIDs to remove: {to_remove_uuids}")
         books_after_removal = [book for book in usbms_booklist if book.uuid not in to_remove_uuids]
         
         usbms_booklist.clear()
@@ -726,6 +727,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     lpath=lpath,
                     size=os.path.getsize(dest_file_path),
                 )
+                book.uuid = str(uuid.uuid4()) # Manually generate UUID
                 book.datetime = datetime.utcnow().timetuple()[:6] # Set datetime attribute as a time tuple
                 book.is_dir = False # Set is_dir attribute after creation
                 book.is_readonly = True # Set is_readonly attribute after creation
@@ -738,7 +740,9 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 # Populate standard Book attributes
                 book.title = title
                 book.authors = [author]
-                book.uuid = f"anx_book_{book_id_from_db}" # Calibre expects a UUID for each book
+                # Calibre will assign a UUID. We will use user_metadata for our internal ID.
+                # book.uuid = f"anx_book_{book_id_from_db}" # Removed manual UUID setting
+                # default_log.debug(f"ANX Device: upload_books - Set book.uuid to: {book.uuid}") # Removed log
                 book.has_cover = True if cover_path_rel else False
                 book.format_map = {fmt.upper(): os.path.getsize(dest_file_path)}
                 book.device_id = self.uuid
@@ -755,6 +759,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 else:
                     book.thumbnail = None
 
+                default_log.debug(f"ANX Device: upload_books - Book UUID before adding to device: {book.uuid}")
                 self.books_in_device[book.uuid] = book
                 self.booklist.add_book(book, None)
                 # The 'on_card' variable is not defined in this scope. Assuming it should be None or 'main' for a virtual device.
