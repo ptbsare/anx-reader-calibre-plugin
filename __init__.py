@@ -37,7 +37,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
     FORMATS             = ["epub", "mobi", "azw3", "fb2", "txt", "pdf"]
     MANAGES_DEVICE_PRESENCE = True # Set to True as per Remarkable plugin
     ASK_TO_ALLOW_CONNECT = True # Enable user approval for connection
-    CAN_SET_METADATA = ['title', 'authors', 'collections', 'user_metadata']
+    CAN_SET_METADATA = ['title', 'authors']
     # Add dummy USB IDs to simulate a USB device
     VENDOR_ID = [0xAAAA] # Use a unique dummy Vendor ID
     PRODUCT_ID = [0xBBBB] # Use a unique dummy Product ID
@@ -202,7 +202,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     size=file_size,
                 )
                 book.uuid = str(uuid.uuid4()) # Manually generate UUID
-                book.datetime = file_mtime.timetuple()[:6] # Set datetime attribute as a time tuple
+                book.datetime = file_mtime.timetuple() # Set datetime attribute as a full time tuple
                 book.is_dir = False # Set is_dir attribute after creation
                 book.is_readonly = True # Set is_readonly attribute after creation
 
@@ -786,7 +786,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     size=os.path.getsize(dest_file_path),
                 )
                 book.uuid = str(uuid.uuid4()) # Manually generate UUID
-                book.datetime = datetime.utcnow().timetuple()[:6] # Set datetime attribute as a time tuple
+                book.datetime = datetime.utcnow().timetuple() # Set datetime attribute as a full time tuple
                 book.is_dir = False # Set is_dir attribute after creation
                 book.is_readonly = True # Set is_readonly attribute after creation
 
@@ -925,7 +925,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 ))
                 results.append((path, files_in_books))
             
-            return results
+        return results
 
     def do_user_manual(self, gui):
         self.gui.job_manager.show_message('ANX Device Plugin: Manage ebooks in your custom ANX folder structure. Configure the device path in Calibre Preferences -> Plugins -> Device Plugins -> ANX Virtual Device -> Customize plugin.')
