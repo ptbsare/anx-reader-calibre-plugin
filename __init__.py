@@ -69,8 +69,8 @@ class AnxBookMetadata(Metadata): # Inherit from Metadata
         self.has_cover = has_cover
         self.format_map = format_map
         self.device_id = device_id
-        self.size = size
         self.datetime = dt_obj if dt_obj is not None else datetime.utcnow() # Use dt_obj to avoid name collision
+        self.size = sum(format_map.values()) # Calculate size from format_map
         self.thumbnail = thumbnail
         self.tags = tags if tags is not None else []
         self.cover_path = cover_path
@@ -230,8 +230,8 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 book_id, title, author, file_path_rel, cover_path_rel, file_md5 = row
                 self.log.info(f"ANX Device: load_books_from_device - book_id: {book_id}, cover_path_rel from DB: {cover_path_rel}")
                 
-                full_file_path = os.path.join(self.base_dir, 'data', file_path_rel)
-                full_cover_path = os.path.join(self.base_dir, 'data', cover_path_rel) if cover_path_rel else None
+                full_file_path = os.path.join(self.file_dir, os.path.basename(file_path_rel))
+                full_cover_path = os.path.join(self.cover_dir, os.path.basename(cover_path_rel)) if cover_path_rel else None
 
                 file_size = os.path.getsize(full_file_path) if os.path.exists(full_file_path) else 0
                 file_mtime = datetime.fromtimestamp(os.path.getmtime(full_file_path)) if os.path.exists(full_file_path) else datetime.utcnow()
@@ -758,6 +758,10 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 continue
         
         self.report_progress(1.0, 'Finished sending books.')
+        # After sending books, force a refresh of the device view in Calibre GUI
+        if self.gui:
+            self.gui.device_manager.refresh_devices()
+            self.log.info("ANX Device: Triggered GUI device refresh after sending books.")
         return locations # Return only locations list
 
     def books(self, oncard=None, end_session=True): # Add end_session parameter
