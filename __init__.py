@@ -6,7 +6,6 @@ from datetime import datetime
 import shutil
 
 from calibre.devices.usbms.driver import USBMS, BookList # Keep BookList for now, but ensure CollectionsBookList is used
-from calibre.utils.filenames import ascii_text
 from calibre.utils.config import JSONConfig
 from calibre.utils.logging import default_log
 from PyQt5.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget
@@ -591,14 +590,12 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 title = book_data.title if book_data.title else os.path.splitext(os.path.basename(src_path))[0]
                 author = book_data.authors[0] if book_data.authors else "Unknown"
                 
-                sanitized_title = ascii_text(title)
-                sanitized_author = ascii_text(author)
                 
                 fmt = os.path.splitext(src_path)[1].lstrip('.').lower()
                 if not fmt:
                     fmt = 'epub'
-                # Ensure the filename is based on sanitized title and author
-                filename = f"{sanitized_title} - {sanitized_author}.{fmt}"
+                # Ensure the filename is based on safe title and author, preserving UTF-8
+                filename = f"{title} - {author}.{fmt}"
                 dest_file_path = os.path.join(self.file_dir, filename)
                 
                 os.makedirs(self.file_dir, exist_ok=True)
@@ -611,7 +608,6 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 
                 cover_path_rel = ""
                 dest_cover_path = "" # Initialize dest_cover_path
-                # Ensure cover filename is based on sanitized title and author
                 
                 full_cover_data = book_data.cover_data # This should be (format, data) tuple
                 cover_data_to_write = None
@@ -656,7 +652,8 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                         self.log.warning(f"ANX Device: No cover path found in metadata for book {title} in Calibre DB.")
 
                 if cover_data_to_write:
-                    cover_filename = f"{sanitized_title} - {sanitized_author}{cover_extension}"
+                    # Use safe_filename for cover filename as well
+                    cover_filename = f"{title} - {author}{cover_extension}"
                     dest_cover_path = os.path.join(self.cover_dir, cover_filename)
                     
                     try:
