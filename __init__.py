@@ -90,9 +90,11 @@ class AnxDevicePlugin(DevicePlugin):
     supported_platforms = ['windows', 'osx', 'linux']
     capabilities        = frozenset(['send_books', 'delete_books', 'card_a_from_b', 'has_user_manual'])
     MANAGES_DEVICE_PRESENCE = True # Set to True as per Remarkable plugin
+    ASK_TO_ALLOW_CONNECT = True # Enable user approval for connection
     
     config_spec = JSONConfig('plugins/anx_device_plugin')
     config_spec.defaults['device_path'] = ''
+    config_spec.defaults['blacklisted_devices'] = {} # Initialize blacklisted devices
 
     def __init__(self, plugin_path):
         DevicePlugin.__init__(self, plugin_path)
@@ -671,6 +673,35 @@ class AnxDevicePlugin(DevicePlugin):
 
     def books(self, oncard=None):
         return self.booklist
+
+    def get_device_uid(self):
+        # Return a unique ID for the device. For a virtual device, use its UUID.
+        self.log.info(f"ANX Device: get_device_uid called, returning {self.uuid}")
+        return self.uuid
+
+    def ignore_connected_device(self, uid):
+        # Add the device UID to the blacklist.
+        self.log.info(f"ANX Device: ignore_connected_device called for UID: {uid}")
+        blacklisted_devices = self.get_user_blacklisted_devices()
+        if uid not in blacklisted_devices:
+            blacklisted_devices[uid] = f"ANX Device ({uid})" # Store with a friendly name
+            self.set_user_blacklisted_devices(blacklisted_devices)
+            self.log.info(f"ANX Device: Added {uid} to blacklist.")
+        
+        # Reset plugin state as per interface documentation
+        self.seen_device = False
+        self.connected = False
+        self.books_in_device = {}
+        self.booklist.clear()
+
+    def get_user_blacklisted_devices(self):
+        # Return a dictionary of blacklisted devices (UID -> friendly name).
+        return self.settings.get('blacklisted_devices', {})
+
+    def set_user_blacklisted_devices(self, devices):
+        # Set the blacklisted devices.
+        self.settings['blacklisted_devices'] = devices
+        self.settings.commit() # Save changes to config file
 
     def list(self, path, recurse=False):
         # This method is called by calibre/devices/cli.py for 'ls' command
