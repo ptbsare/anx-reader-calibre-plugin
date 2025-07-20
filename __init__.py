@@ -54,7 +54,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         self.log = default_log
         if not hasattr(self, 'uuid') or not self.uuid:
             self.uuid = str(uuid.uuid4())
-            self.log.info(f"ANX Device: Forced initialization of self.uuid to {self.uuid}")
+            self.log.debug(f"ANX Device: Forced initialization of self.uuid to {self.uuid}")
         self.db_path = None
         self.file_dir = None
         self.cover_dir = None
@@ -92,7 +92,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             self.cover_dir = os.path.join(self.base_dir, 'data', 'cover')
             self.connected = self.is_connect_to_this_device()
             if self.connected:
-                self.log.info(f"ANX Device re-configured and connected to: {self.base_dir}")
+                self.log.debug(f"ANX Device re-configured and connected to: {self.base_dir}")
                 self.load_books_from_device()
                 # Update USBMS internal state
                 self._main_prefix = self.base_dir + os.sep if not self.base_dir.endswith(os.sep) else self.base_dir
@@ -101,7 +101,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 self.log.warning(f"ANX Device re-configured but not connected. Check path: {self.base_dir}")
                 self.is_connected = False # Ensure USBMS state is updated
         else:
-            self.log.info("ANX Device path not configured after saving. Please configure it in preferences.")
+            self.log.debug("ANX Device path not configured after saving. Please configure it in preferences.")
             self.is_connected = False # Ensure USBMS state is updated
 
     def get_gui_name(self):
@@ -117,11 +117,11 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             only_presence=False):
         # Override USBMS's is_usb_connected to report our connection status
         # This is crucial for Calibre GUI to detect the device
-        self.log.info(f"ANX Device: is_usb_connected called. Returning {self.is_connected}, {self}")
+        self.log.debug(f"ANX Device: is_usb_connected called. Returning {self.is_connected}, {self}")
         return self.is_connected, self
 
     def open(self, connected_device, library_uuid):
-        self.log.info(f"ANX Device: open method called for {connected_device}")
+        self.log.debug(f"ANX Device: open method called for {connected_device}")
         # Ensure base_dir is set if it wasn't already (e.g., from managed detection)
         if not self.base_dir and isinstance(connected_device, str) and connected_device.startswith(FAKE_DEVICE_SERIAL):
             self.base_dir = connected_device.replace(FAKE_DEVICE_SERIAL, '')
@@ -174,7 +174,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             
             for row in cursor.fetchall():
                 book_id, title, author, file_path_rel, cover_path_rel, file_md5 = row
-                self.log.info(f"ANX Device: load_books_from_device - book_id: {book_id}, cover_path_rel from DB: {cover_path_rel}")
+                self.log.debug(f"ANX Device: load_books_from_device - book_id: {book_id}, cover_path_rel from DB: {cover_path_rel}")
                 
                 full_file_path = os.path.join(self.file_dir, os.path.basename(file_path_rel))
                 full_cover_path = os.path.join(self.cover_dir, os.path.basename(cover_path_rel)) if cover_path_rel else None
@@ -227,7 +227,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 self.booklist.add_book(book, None) # Use USBMS's BookList.add_book method (which handles duplicates)
                 
             conn.close()
-            self.log.info(f"Loaded {len(self.books_in_device)} books from ANX device.")
+            self.log.debug(f"Loaded {len(self.books_in_device)} books from ANX device.")
         except Exception as e:
             import traceback
             self.log.error(f"Error loading books from device: {e}")
@@ -239,7 +239,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             return True # Device already seen and no refresh forced
         
         device_path = prefs['device_path']
-        self.log.info(f"ANX Device: detect_managed_devices - configured device_path: {device_path}")
+        self.log.debug(f"ANX Device: detect_managed_devices - configured device_path: {device_path}")
         
         if device_path and os.path.isdir(device_path):
             self.base_dir = device_path
@@ -248,27 +248,27 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             self.cover_dir = os.path.join(self.base_dir, 'data', 'cover')
             
             is_connected = self.is_connect_to_this_device()
-            self.log.info(f"ANX Device: detect_managed_devices.is_connect_to_this_device() returned: {is_connected}")
+            self.log.debug(f"ANX Device: detect_managed_devices.is_connect_to_this_device() returned: {is_connected}")
             
             if is_connected:
-                self.log.info(f"ANX Device detected at: {device_path}")
+                self.log.debug(f"ANX Device detected at: {device_path}")
                 self.seen_device = True
                 return True # Return a truthy value to indicate device found
             else:
                 self.log.warning(f"ANX Device path is valid, but connection check failed for: {device_path}")
         else:
-            self.log.info("ANX Device: No valid device path configured or path does not exist: %s", device_path)
+            self.log.debug("ANX Device: No valid device path configured or path does not exist: %s", device_path)
         self.seen_device = False
         return False
 
     def debug_managed_device_detection(self, devices_on_system, output):
-        self.log.info("ANX Device: debug_managed_device_detection called.")
+        self.log.debug("ANX Device: debug_managed_device_detection called.")
         output.write("ANX Device Plugin: Debugging managed device detection.\n")
         output.write(f"Configured device path: {prefs['device_path']}\n")
         return False # Return False as no device was successfully opened by this debug method
 
     def get_plugged_devices(self, all_devices):
-        self.log.info("ANX Device: get_plugged_devices called (should not be called if MANAGES_DEVICE_PRESENCE is True).")
+        self.log.debug("ANX Device: get_plugged_devices called (should not be called if MANAGES_DEVICE_PRESENCE is True).")
         return []
 
     def set_progress_reporter(self, report_progress):
@@ -325,7 +325,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 os.makedirs(self.cover_dir, exist_ok=True)
 
                 shutil.copyfile(src_path, dest_file_path)
-                self.log.info(f"Copied ebook from {src_path} to {dest_file_path}")
+                self.log.debug(f"Copied ebook from {src_path} to {dest_file_path}")
 
                 file_size = os.path.getsize(dest_file_path) # Get file size after copy
                 file_md5_val = hashlib.md5(open(dest_file_path, 'rb').read()).hexdigest()
@@ -347,7 +347,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     try:
                         with open(cover_path_abs, 'wb') as f:
                             f.write(current_metadata.cover_data[1])
-                        self.log.info(f"Copied cover to {cover_path_abs} with format {cover_format}.")
+                        self.log.debug(f"Copied cover to {cover_path_abs} with format {cover_format}.")
                     except Exception as ce:
                         self.log.error(f"Error copying cover data to {cover_path_abs}: {ce}")
                         cover_path_abs = "" # Reset cover_path_abs if copy fails
@@ -362,7 +362,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 existing_book = cursor.fetchone()
 
                 if existing_book:
-                    self.log.info(f"Book '{title}' with MD5 '{file_md5_val}' already exists in device DB. Skipping insert.")
+                    self.log.debug(f"Book '{title}' with MD5 '{file_md5_val}' already exists in device DB. Skipping insert.")
                     conn.close()
                     continue
                 
@@ -386,7 +386,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 conn.commit()
                 book_id_from_db = cursor.lastrowid
                 conn.close()
-                self.log.info(f"Book '{title}' successfully added to ANX device database with ID: {book_id_from_db}.")
+                self.log.debug(f"Book '{title}' successfully added to ANX device database with ID: {book_id_from_db}.")
                 sent_count += 1
 
                 # Create a USBMS.Book object directly
@@ -441,7 +441,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         return locations # Return only locations list
 
     def delete_books(self, book_ids, callback=None, end_session=True):
-        self.log.info(f"ANX Device: delete_books called with book_ids: {book_ids}")
+        self.log.debug(f"ANX Device: delete_books called with book_ids: {book_ids}")
         deleted_count = 0
         total_to_delete = len(book_ids)
 
@@ -452,8 +452,8 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         books_to_remove_from_db = []
         books_to_remove_from_cache = []
 
-        self.log.info(f"ANX Device: Current books in device cache (paths): {[os.path.normpath(b.path) for b in self.booklist]}")
-        self.log.info(f"ANX Device: Current books in device cache (UUIDs): {[b.uuid for b in self.booklist]}")
+        self.log.debug(f"ANX Device: Current books in device cache (paths): {[os.path.normpath(b.path) for b in self.booklist]}")
+        self.log.debug(f"ANX Device: Current books in device cache (UUIDs): {[b.uuid for b in self.booklist]}")
 
         # Build a temporary map for efficient lookup based on UUID or normalized path
         temp_book_map = {b.uuid: b for b in self.booklist}
@@ -461,7 +461,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             temp_book_map[os.path.normpath(b.path)] = b
 
         for item_to_delete in book_ids:
-            self.log.info(f"ANX Device: Attempting to delete item: {item_to_delete}")
+            self.log.debug(f"ANX Device: Attempting to delete item: {item_to_delete}")
             book_to_delete = None
 
             # Try to find by UUID first, then by normalized path
@@ -474,24 +474,24 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 book_path = book_to_delete.path
                 cover_meta = book_to_delete.get_user_metadata('#anx_cover_path', make_copy=False)
                 cover_path = cover_meta.get('#value#') if isinstance(cover_meta, dict) else None
-                self.log.info(f"ANX Device: Found book in cache. Path: {book_path}, Cover Path (from user metadata): {cover_path}")
+                self.log.debug(f"ANX Device: Found book in cache. Path: {book_path}, Cover Path (from user metadata): {cover_path}")
 
                 # Delete file
                 if os.path.exists(book_path):
                     try:
                         os.remove(book_path)
-                        self.log.info(f"ANX Device: Successfully deleted file: {book_path}")
+                        self.log.debug(f"ANX Device: Successfully deleted file: {book_path}")
                         deleted_count += 1
                     except Exception as e:
                         self.log.error(f"ANX Device: Error deleting file {book_path}: {e}", exc_info=True)
                 else:
-                    self.log.info(f"ANX Device: File not found on disk: {book_path}")
+                    self.log.debug(f"ANX Device: File not found on disk: {book_path}")
 
                 # Delete cover file
                 if cover_path and os.path.exists(cover_path):
                     try:
                         os.remove(cover_path)
-                        self.log.info(f"ANX Device: Successfully deleted cover file: {cover_path}")
+                        self.log.debug(f"ANX Device: Successfully deleted cover file: {cover_path}")
                     except Exception as e:
                         self.log.error(f"ANX Device: Error deleting cover file {cover_path}: {e}", exc_info=True)
 
@@ -513,7 +513,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
 
                     if anx_db_id is not None:
                         cursor.execute("DELETE FROM tb_books WHERE id = ?", (anx_db_id,))
-                        self.log.info(f"ANX Device: Deleted book with ANX DB ID {anx_db_id} from database.")
+                        self.log.debug(f"ANX Device: Deleted book with ANX DB ID {anx_db_id} from database.")
                     else:
                         self.log.warning(f"ANX Device: Could not find #anx_db_id in user_metadata for book {book.uuid}. Skipping DB deletion.")
                 conn.commit()
@@ -667,7 +667,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 os.makedirs(self.cover_dir, exist_ok=True)
 
                 shutil.copyfile(src_path, dest_file_path)
-                self.log.info(f"Copied ebook from {src_path} to {dest_file_path}")
+                self.log.debug(f"Copied ebook from {src_path} to {dest_file_path}")
 
                 file_md5 = hashlib.md5(open(dest_file_path, 'rb').read()).hexdigest()
 
@@ -681,9 +681,9 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     with open(dest_cover_path, 'wb') as f:
                         f.write(cover_data[1])
                     cover_path_rel = os.path.relpath(dest_cover_path, self.base_dir)
-                    self.log.info(f"Copied cover to {dest_cover_path}")
+                    self.log.debug(f"Copied cover to {dest_cover_path}")
                 else:
-                    self.log.warning(f"No cover found for book {title}")
+                    self.log.warning(f"No cover found for book {title}") # Keep as warning
 
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
@@ -693,7 +693,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 existing_book = cursor.fetchone()
 
                 if existing_book:
-                    self.log.info(f"Book '{title}' with MD5 '{file_md5}' already exists in device DB. Skipping insert.")
+                    self.log.debug(f"Book '{title}' with MD5 '{file_md5}' already exists in device DB. Skipping insert.")
                     conn.close()
                     continue
                 
@@ -716,7 +716,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 conn.commit()
                 book_id_from_db = cursor.lastrowid
                 conn.close()
-                self.log.info(f"Book '{title}' successfully added to ANX device database with ID: {book_id_from_db}.")
+                self.log.debug(f"Book '{title}' successfully added to ANX device database with ID: {book_id_from_db}.")
                 sent_count += 1
 
                 # Create a USBMS.Book object directly
@@ -775,17 +775,17 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
 
     def get_device_uid(self):
         # Return a unique ID for the device. For a virtual device, use its UUID.
-        self.log.info(f"ANX Device: get_device_uid called, returning {self.uuid}")
+        self.log.debug(f"ANX Device: get_device_uid called, returning {self.uuid}")
         return self.uuid
 
     def ignore_connected_device(self, uid):
         # Add the device UID to the blacklist.
-        self.log.info(f"ANX Device: ignore_connected_device called for UID: {uid}")
+        self.log.debug(f"ANX Device: ignore_connected_device called for UID: {uid}")
         blacklisted_devices = self.get_user_blacklisted_devices()
         if uid not in blacklisted_devices:
             blacklisted_devices[uid] = f"ANX Device ({uid})" # Store with a friendly name
             self.set_user_blacklisted_devices(blacklisted_devices)
-            self.log.info(f"ANX Device: Added {uid} to blacklist.")
+            self.log.debug(f"ANX Device: Added {uid} to blacklist.")
         
         # Reset plugin state as per interface documentation
         # Reset plugin state as per interface documentation
@@ -807,7 +807,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
     def list(self, path, recurse=False):
         # This method is called by calibre/devices/cli.py for 'ls' command
         # It should return a list of tuples: (directory_path, [list of AnxFile objects])
-        self.log.info(f"ANX Device: list method called for path: {path}, recurse: {recurse}")
+        self.log.debug(f"ANX Device: list method called for path: {path}, recurse: {recurse}")
         
         results = []
         if path == '/' or path == 'card:/':
