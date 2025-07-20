@@ -38,7 +38,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
     FORMATS             = ["epub", "mobi", "azw3", "fb2", "txt", "pdf"]
     MANAGES_DEVICE_PRESENCE = True # Set to True as per Remarkable plugin
     ASK_TO_ALLOW_CONNECT = True # Enable user approval for connection
-
+    CAN_SET_METADATA = ['title', 'authors', 'collections']
     # Add dummy USB IDs to simulate a USB device
     VENDOR_ID = [0xAAAA] # Use a unique dummy Vendor ID
     PRODUCT_ID = [0xBBBB] # Use a unique dummy Product ID
@@ -499,6 +499,78 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         usbms_booklist.clear()
         for book in books_after_removal:
             usbms_booklist.add_book(book, None)
+
+    def sync_booklists(self, booklists, end_session=True):
+        self.log.debug("ANX Device: sync_booklists called.")
+        
+        main_booklist = booklists[0] # The main booklist from Calibre's USBMS driver
+        
+        # Iterate through the books in the main_booklist
+        for book_obj in main_booklist:
+            # Get ANX DB ID from user_metadata
+            anx_db_id_meta = book_obj.get_user_metadata('#anx_db_id', make_copy=False)
+            anx_db_id = anx_db_id_meta.get('#value#') if isinstance(anx_db_id_meta, dict) else None
+
+            if anx_db_id is None:
+                self.log.warning(f"ANX Device: sync_booklists - Could not find #anx_db_id in user_metadata for book {book_obj.uuid}. Skipping metadata update for this book.")
+                continue
+
+            conn = None
+            try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                current_time = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                
+                # Retrieve current metadata from DB to check for changes
+                cursor.execute("SELECT title, author FROM tb_books WHERE id = ?;", (anx_db_id,))
+                db_title, db_author = cursor.fetchone()
+                
+                # Check for changes in title and authors
+                title_changed = False
+                if book_obj.title != db_title:
+                    title_changed = True
+                
+                authors_changed = False
+                # Assuming single author for simplicity, compare first author
+                current_author_in_book = book_obj.authors[0] if book_obj.authors else ''
+                if current_author_in_book != db_author:
+                    authors_changed = True
+
+                if title_changed or authors_changed:
+                    update_fields = []
+                    update_values = []
+                    
+                    if title_changed:
+                        update_fields.append("title = ?")
+                        update_values.append(book_obj.title)
+                        self.log.debug(f"ANX Device: sync_booklists - Title changed for book ID {anx_db_id}: '{db_title}' -> '{book_obj.title}'")
+                    if authors_changed:
+                        update_fields.append("author = ?")
+                        update_values.append(current_author_in_book)
+                        self.log.debug(f"ANX Device: sync_booklists - Author changed for book ID {anx_db_id}: '{db_author}' -> '{current_author_in_book}'")
+                    
+                    update_fields.append("update_time = ?")
+                    update_values.append(current_time)
+                    
+                    sql_update = f"UPDATE tb_books SET {', '.join(update_fields)} WHERE id = ?;"
+                    update_values.append(anx_db_id)
+                    
+                    self.log.debug(f"ANX Device: sync_booklists - SQL Update: {sql_update}")
+                    self.log.debug(f"ANX Device: sync_booklists - Update Values: {update_values}")
+                    
+                    cursor.execute(sql_update, tuple(update_values))
+                    conn.commit()
+                    self.log.debug(f"ANX Device: Successfully updated metadata for book with ANX DB ID {anx_db_id} in database.")
+                else:
+                    self.log.debug(f"ANX Device: No metadata changes detected for book ID {anx_db_id}.")
+                
+            except Exception as e:
+                self.log.error(f"ANX Device: Error updating metadata for book {book_obj.uuid} (ANX DB ID: {anx_db_id}) in database during sync_booklists: {e}", exc_info=True)
+            finally:
+                if conn:
+                    conn.close()
+        self.log.debug("ANX Device: sync_booklists finished.")
+        return True # Indicate success
 
     def upload_books(self, files, names, on_card=None, end_session=True, metadata=None):
         sent_count = 0
