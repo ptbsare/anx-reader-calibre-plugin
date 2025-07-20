@@ -59,10 +59,11 @@ class AnxBookList(BookList):
     def __repr__(self):
         return f"AnxBookList(len={len(self)})"
 
-class AnxBookMetadata:
+from calibre.ebooks.metadata.book.base import Metadata
+
+class AnxBookMetadata(Metadata): # Inherit from Metadata
     def __init__(self, title: str, authors: List[str], uuid: str, path: str, has_cover: bool, format_map: dict, device_id: str, size: int = 0, datetime: datetime = None, thumbnail: bytes = None, tags: List[str] = None, cover_path: str = None, file_md5: str = None):
-        self.title = title
-        self.authors = authors
+        super().__init__(title, authors) # Call parent constructor with title and authors
         self.uuid = uuid
         self.path = path
         self.has_cover = has_cover
@@ -75,9 +76,7 @@ class AnxBookMetadata:
         self.cover_path = cover_path
         self.file_md5 = file_md5
         self.device_collections = [] # Add device_collections attribute
-
-    def __repr__(self):
-        return f"AnxBookMetadata(title='{self.title}', uuid='{self.uuid}')"
+        # Remove get() and get_all_user_metadata() as they are provided by Metadata base class
 
 
 class AnxDevicePlugin(USBMS): # Change base class to USBMS
@@ -228,9 +227,10 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             
             for row in cursor.fetchall():
                 book_id, title, author, file_path_rel, cover_path_rel, file_md5 = row
+                self.log.info(f"ANX Device: load_books_from_device - book_id: {book_id}, cover_path_rel from DB: {cover_path_rel}")
                 
                 full_file_path = os.path.join(self.base_dir, 'data', file_path_rel)
-                full_cover_path = os.path.join(self.base_dir, 'cover', cover_path_rel) if cover_path_rel else None
+                full_cover_path = os.path.join(self.base_dir, 'data', cover_path_rel) if cover_path_rel else None
 
                 file_size = os.path.getsize(full_file_path) if os.path.exists(full_file_path) else 0
                 file_mtime = datetime.fromtimestamp(os.path.getmtime(full_file_path)) if os.path.exists(full_file_path) else datetime.utcnow()
@@ -247,7 +247,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     datetime=file_mtime.timetuple()[:6], # Convert datetime object to a tuple (year, month, day, hour, minute, second)
                     thumbnail=open(full_cover_path, 'rb').read() if full_cover_path and os.path.exists(full_cover_path) else None, # Fill thumbnail with cover image data
                     tags=[],
-                    cover_path=cover_path_rel,
+                    cover_path=full_cover_path,
                     file_md5=file_md5
                 )
 
@@ -303,7 +303,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         return []
 
     def set_progress_reporter(self, report_progress):
-        self.report_progress_callback = report_progress
+        self.report_progress = report_progress # Assign to self.report_progress
 
     def get_device_information(self, end_session=True): # Add end_session parameter
         # Returns (device name, device version, software version on device, MIME type, drive information dictionary (optional))
@@ -430,71 +430,96 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         self.report_progress(1.0, 'Finished sending books.')
         return (locations, None, None)
 
-    def delete_books(self, book_ids, callback=None):
+    def delete_books(self, book_ids, callback=None, end_session=True):
+        self.log.info(f"ANX Device: delete_books called with book_ids: {book_ids}")
         deleted_count = 0
-        total_books = len(book_ids)
+        total_to_delete = len(book_ids)
 
         if not self.connected:
             self.log.error("ANX Device not connected. Cannot delete books.")
             return []
 
-        conn = None
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            for i, book_uuid in enumerate(book_ids):
-                self.report_progress(float(i) / total_books, f'Deleting book {i+1} of {total_books}')
-                
-                anx_book_metadata = self.books_in_device.get(book_uuid)
-                if not anx_book_metadata:
-                    self.log.warning(f"Book with UUID {book_uuid} not found in device cache. Skipping deletion.")
-                    continue
+        # Create a mapping from file path to AnxBookMetadata for efficient lookup
+        books_to_delete_map = {}
+        for book_meta in self.booklist:
+            # Normalize path for comparison (e.g., ensure consistent separators)
+            normalized_path = os.path.normpath(book_meta.path)
+            books_to_delete_map[normalized_path] = book_meta
+            books_to_delete_map[book_meta.uuid] = book_meta # Also map by UUID
 
-                anx_book_id = book_uuid.replace('anx_book_', '')
-                
-                cursor.execute("SELECT file_path, cover_path FROM tb_books WHERE id = ?;", (anx_book_id,))
-                result = cursor.fetchone()
-                
-                if result:
-                    file_path_rel, cover_path_rel = result
-                    full_file_path = os.path.join(self.base_dir, file_path_rel)
-                    full_cover_path = os.path.join(self.base_dir, cover_path_rel) if cover_path_rel else None
+        books_to_remove_from_db = []
 
-                    if os.path.exists(full_file_path):
-                        os.remove(full_file_path)
-                        self.log.info(f"Deleted ebook file: {full_file_path}")
-                    else:
-                        self.log.warning(f"Ebook file not found for deletion: {full_file_path}")
+        self.log.info(f"ANX Device: Current books in device cache (paths): {[os.path.normpath(b.path) for b in self.booklist]}")
+        self.log.info(f"ANX Device: Current books in device cache (UUIDs): {[b.uuid for b in self.booklist]}")
 
-                    if full_cover_path and os.path.exists(full_cover_path):
-                        os.remove(full_cover_path)
-                        self.log.info(f"Deleted cover file: {full_cover_path}")
-                    else:
-                        self.log.warning(f"Cover file not found for deletion: {full_cover_path}")
-                    
-                    cursor.execute("DELETE FROM tb_books WHERE id = ?;", (anx_book_id,))
-                    conn.commit()
-                    self.log.info(f"Book with ANX ID {anx_book_id} deleted from database.")
-                    deleted_count += 1
+        for item_to_delete in book_ids:
+            self.log.info(f"ANX Device: Attempting to delete item: {item_to_delete}")
+            book_to_delete = None
 
-                    if book_uuid in self.books_in_device:
-                        del self.books_in_device[book_uuid]
-                    self.booklist.remove_book(anx_book_metadata)
+            # Try to find by normalized path first
+            normalized_item = os.path.normpath(item_to_delete)
+            book_to_delete = books_to_delete_map.get(normalized_item)
 
+            if not book_to_delete:
+                # If not found by path, try to find by UUID
+                book_to_delete = books_to_delete_map.get(item_to_delete)
+
+            if book_to_delete:
+                # Use the absolute paths directly from AnxBookMetadata
+                book_path = book_to_delete.path
+                cover_path = book_to_delete.cover_path
+                self.log.info(f"ANX Device: Found book in cache. Path: {book_path}, Cover Path: {cover_path}")
+
+                # Delete file
+                if os.path.exists(book_path):
+                    try:
+                        os.remove(book_path)
+                        self.log.info(f"ANX Device: Successfully deleted file: {book_path}")
+                        deleted_count += 1
+                    except Exception as e:
+                        self.log.error(f"ANX Device: Error deleting file {book_path}: {e}", exc_info=True)
                 else:
-                    self.log.warning(f"Book with ANX ID {anx_book_id} not found in device database. Skipping deletion.")
+                    self.log.info(f"ANX Device: File not found on disk: {book_path}")
 
-        except Exception as e:
-            self.log.error(f"Error deleting books: {e}")
-            import traceback
-            self.log.error(traceback.format_exc())
-        finally:
-            if conn:
-                conn.close()
-        
+                # Delete cover file
+                if cover_path and os.path.exists(cover_path):
+                    try:
+                        os.remove(cover_path)
+                        self.log.info(f"ANX Device: Successfully deleted cover file: {cover_path}")
+                    except Exception as e:
+                        self.log.error(f"ANX Device: Error deleting cover file {cover_path}: {e}", exc_info=True)
+
+                books_to_remove_from_db.append(book_to_delete)
+            else:
+                self.log.warning(f"ANX Device: Book or path '{item_to_delete}' not found in device cache. Skipping deletion.")
+
+        # Remove from database
+        if books_to_remove_from_db:
+            conn = None
+            try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                for book in books_to_remove_from_db:
+                    # Assuming UUID is stored as 'anx_book_ID'
+                    anx_book_id = book.uuid.replace('anx_book_', '')
+                    cursor.execute("DELETE FROM tb_books WHERE id = ?", (anx_book_id,))
+                    self.log.info(f"ANX Device: Deleted book with ANX ID {anx_book_id} from database.")
+                conn.commit()
+            except Exception as e:
+                self.log.error(f"ANX Device: Error deleting books from database: {e}", exc_info=True)
+            finally:
+                if conn:
+                    conn.close()
+
+        # Update internal booklist
+        for book in books_to_remove_from_db:
+            if book.uuid in self.books_in_device:
+                del self.books_in_device[book.uuid]
+            self.booklist.remove_book(book)
+            self.log.info(f"ANX Device: Removed book {book.title} ({book.uuid}) from internal booklist.")
+
         self.report_progress(1.0, 'Finished deleting books.')
-        return []
+        return True # Return True for success, as per interface for USBMS.delete_books
 
     def get_library_uuid(self, detected_device_id):
         return None
@@ -534,7 +559,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
     def get_cover(self, book_id, as_file=False):
         book = self.books_in_device.get(book_id)
         if book and book.has_cover and book.cover_path:
-            cover_path = os.path.join(self.base_dir, book.cover_path)
+            cover_path = book.cover_path # It's already an absolute path from load_books_from_device
             if os.path.exists(cover_path):
                 if as_file:
                     return open(cover_path, 'rb')
@@ -692,7 +717,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 self.books_in_device[anx_book_metadata.uuid] = anx_book_metadata
                 self.booklist.add_book(anx_book_metadata, None)
 
-                locations.append(anx_book_metadata.uuid)
+                locations.append((anx_book_metadata.uuid, fmt.upper(), dest_file_path)) # Return (uuid, format, path)
 
             except Exception as e:
                 self.log.error(f"Error sending book {book_id}: {e}")
