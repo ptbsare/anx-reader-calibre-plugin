@@ -414,11 +414,31 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             return book # Book object already contains all necessary metadata and inherits from Metadata
         return None
 
-    def get_file(self, book_id, fmt, allow_cache=True):
-        book = self.books_in_device.get(book_id)
-        if book and book.path:
-            return open(book.path, 'rb')
-        return None
+    def get_file(self, path, outfile, end_session=True):
+        self.log.debug(f"ANX Device: get_file called for path: {path}")
+        # As per user's feedback, 'path' is the absolute path to the file.
+        # Directly use this path to open the file.
+        
+        actual_file_path = path
+
+        if os.path.exists(actual_file_path):
+            file_size = os.path.getsize(actual_file_path)
+            self.log.debug(f"ANX Device: get_file - File exists at {actual_file_path}, size: {file_size} bytes.")
+            if file_size == 0:
+                self.log.error(f"ANX Device: get_file - File at {actual_file_path} has zero size!")
+            
+            try:
+                with open(actual_file_path, 'rb') as f:
+                    shutil.copyfileobj(f, outfile)
+                self.log.debug(f"ANX Device: get_file - Successfully copied file content from {actual_file_path} to outfile.")
+                return True # Indicate success
+            except Exception as e:
+                self.log.error(f"ANX Device: Error copying file {actual_file_path} to outfile: {e}", exc_info=True)
+                return False
+        else:
+            self.log.error(f"ANX Device: get_file - File does not exist at path: {actual_file_path}")
+            self.log.error(f"ANX Device: get_file - File not found on disk at {actual_file_path}. This path was provided directly by Calibre.")
+        return False # Indicate failure
 
     def get_cover(self, book_id, as_file=False):
         book = self.books_in_device.get(book_id)
