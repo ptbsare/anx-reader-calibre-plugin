@@ -5,13 +5,12 @@ import sqlite3
 from datetime import datetime
 import shutil
 
-from calibre.devices.usbms.driver import USBMS, BookList
+from calibre.devices.usbms.driver import USBMS, BookList # Keep BookList for now, but ensure CollectionsBookList is used
 from calibre.utils.filenames import ascii_text
 from calibre.utils.config import JSONConfig
 from calibre.utils.logging import default_log
 from PyQt5.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget
-from dataclasses import dataclass, field
-from typing import List
+from calibre.devices.usbms.books import Book as USBMSBook, CollectionsBookList # Import Book as USBMSBook and CollectionsBookList
 
 # Import the custom ConfigWidget and preferences object
 from .config import ConfigWidget, prefs
@@ -24,64 +23,10 @@ class AnxFile:
         self.ctime = ctime
         self.wtime = wtime
         self.is_readonly = True # For simplicity, assume all files are read-only
-# Define the custom BookList for ANX device
-class AnxBookList(BookList):
-    def __init__(self, oncard=None, prefix=None, settings=None):
-        super().__init__(oncard, prefix, settings)
-        self.books_by_uuid = {}
-        self.uuids_in_list = []
-
-    def add_book(self, book, replace_metadata=None):
-        if book.uuid not in self.books_by_uuid:
-            self.books_by_uuid[book.uuid] = book
-            self.uuids_in_list.append(book.uuid)
-        self.append(book) # Directly add to the list, as super().add_book is NotImplementedError
-
-    def remove_book(self, book):
-        if book.uuid in self.books_by_uuid:
-            del self.books_by_uuid[book.uuid]
-            if book.uuid in self.uuids_in_list:
-                self.uuids_in_list.remove(book.uuid)
-        super().remove_book(book)
-
-    def __iter__(self):
-        for uuid in self.uuids_in_list:
-            yield self.books_by_uuid[uuid]
-
-    def __len__(self):
-        return len(self.uuids_in_list)
-    
-    def clear(self):
-        self.books_by_uuid = {}
-        self.uuids_in_list = []
-        self[:] = []
-
-    def __repr__(self):
-        return f"AnxBookList(len={len(self)})"
-
-from calibre.ebooks.metadata.book.base import Metadata
-
-class AnxBookMetadata(Metadata): # Inherit from Metadata
-    def __init__(self, title: str, authors: List[str], uuid: str, path: str, has_cover: bool, format_map: dict, device_id: str, size: int = 0, dt_obj: datetime = None, thumbnail: bytes = None, tags: List[str] = None, cover_path: str = None, file_md5: str = None):
-        super().__init__(title, authors) # Call parent constructor with title and authors
-        self.uuid = uuid
-        self.path = path
-        self.has_cover = has_cover
-        self.format_map = format_map
-        self.device_id = device_id
-        self.datetime = dt_obj if isinstance(dt_obj, tuple) else (dt_obj.timetuple()[:6] if dt_obj is not None else datetime.utcnow().timetuple()[:6]) # Ensure datetime is a tuple
-        self.size = sum(format_map.values()) # Calculate size from format_map
-        self.thumbnail = thumbnail
-        self.tags = tags if tags is not None else []
-        # Store cover_path and file_md5 as user metadata as they are not standard Metadata attributes
-        self.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': cover_path or ''})
-        self.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ''})
-        self.device_collections = [] # Add device_collections attribute
 
 
 class AnxDevicePlugin(USBMS): # Change base class to USBMS
     name                = 'ANX Virtual Device'
-#    gui_name            = 'ANX Device'
     gui_name = _('ANX Device')
     icon = 'devices/tablet.png'
     description         = 'Connects to a custom folder structure with a database7.db file for managing ebooks.'
@@ -103,7 +48,6 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
     config_spec.defaults['blacklisted_devices'] = {} # Initialize blacklisted devices
 
     def __init__(self, plugin_path):
-        # Initialize USBMS with a dummy path for now, actual path set in apply_settings
         super().__init__(plugin_path) # Call USBMS's __init__ or DevicePlugin's __init__
         self.gui = None
         self.prefs = prefs
@@ -117,12 +61,12 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         self.base_dir = None
         self.connected = False
         self.seen_device = False # Added for managed device presence
-        self.books_in_device = {}
-        self.booklist = AnxBookList()
-        # USBMS specific properties, ensure they are initialized
-        self._main_prefix = ''
-        self._card_a_prefix = None  # Ensure card_a is not displayed
-        self._card_b_prefix = None  # Ensure card_b is not displayed
+        self.books_in_device = {} # Manually initialize books_in_device
+        # Use CollectionsBookList as it handles collections and is preferred
+        self._main_prefix = None
+        self._card_a_prefix = None
+        self._card_b_prefix = None
+        self.booklist = CollectionsBookList(prefix=self._main_prefix, settings=None, oncard=None) # Pass required prefix and settings
         self.is_connected = False
 
     def load_actual_plugin(self, gui):
@@ -216,7 +160,9 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         return False
 
     def load_books_from_device(self, detected_mime=None):
-        self.books_in_device = {}
+        # Clear USBMS's internal booklist and books_in_device before reloading
+        # These are properties of the USBMS base class
+        self.books_in_device.clear()
         self.booklist.clear()
         if not self.connected:
             return
@@ -236,25 +182,49 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 file_size = os.path.getsize(full_file_path) if os.path.exists(full_file_path) else 0
                 file_mtime = datetime.fromtimestamp(os.path.getmtime(full_file_path)) if os.path.exists(full_file_path) else datetime.utcnow()
 
-                anx_book_metadata = AnxBookMetadata(
-                    title=title,
-                    authors=[author],
-                    uuid=f"anx_book_{book_id}",
-                    path=full_file_path,
-                    has_cover=True if full_cover_path and os.path.exists(full_cover_path) else False,
-                    format_map={os.path.splitext(full_file_path)[1].lstrip('.').upper(): file_size},
-                    device_id=self.uuid,
+                # Create a USBMS.Book object directly
+                # USBMS.Book constructor: __init__(self, prefix, lpath, size, mtime=None, is_dir=False, is_readonly=False, extra_metadata={})
+                # We need to provide a relative path (lpath) to the book within the device prefix.
+                lpath = os.path.relpath(full_file_path, self.base_dir)
+                
+                book = USBMSBook( # Use USBMSBook
+                    prefix=self.base_dir,
+                    lpath=lpath,
                     size=file_size,
-                    dt_obj=file_mtime.timetuple()[:6], # Convert datetime object to a tuple (year, month, day, hour, minute, second)
-                    thumbnail=open(full_cover_path, 'rb').read() if full_cover_path and os.path.exists(full_cover_path) else None, # Fill thumbnail with cover image data
-                    tags=[]
                 )
-                # Set user metadata for custom fields
-                anx_book_metadata.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': full_cover_path or ''})
-                anx_book_metadata.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ''})
+                book.datetime = file_mtime.timetuple()[:6] # Set datetime attribute as a time tuple
+                book.is_dir = False # Set is_dir attribute after creation
+                book.is_readonly = True # Set is_readonly attribute after creation
 
-                self.books_in_device[anx_book_metadata.uuid] = anx_book_metadata
-                self.booklist.add_book(anx_book_metadata, None)
+                # Store ANX specific metadata as user_metadata
+                book.set_user_metadata('#anx_db_id', {'datatype': 'int', 'is_multiple': False, '#value#': book_id})
+                book.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ''})
+                book.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': full_cover_path or ''})
+
+                # Populate standard Book attributes from DB
+                book.title = title
+                book.authors = [author] if author else [_('Unknown')]
+                book.uuid = f"anx_book_{book_id}" # Calibre expects a UUID for each book
+                book.has_cover = True if full_cover_path and os.path.exists(full_cover_path) else False
+                book.format_map = {os.path.splitext(full_file_path)[1].lstrip('.').upper(): file_size}
+                book.device_id = self.uuid
+                book.in_library = False # Device books are not in library by default
+                book.device_collections = [] # Initialize as empty list
+
+                # If cover exists, load thumbnail
+                if book.has_cover:
+                    try:
+                        with open(full_cover_path, 'rb') as f:
+                            book.thumbnail = f.read()
+                    except Exception as ce:
+                        self.log.error(f"Error loading thumbnail for {title}: {ce}")
+                        book.thumbnail = None
+                else:
+                    book.thumbnail = None
+
+                # Add to USBMS's internal books_in_device and booklist
+                self.books_in_device[book.uuid] = book
+                self.booklist.add_book(book, None) # Use USBMS's BookList.add_book method (which handles duplicates)
                 
             conn.close()
             self.log.info(f"Loaded {len(self.books_in_device)} books from ANX device.")
@@ -277,7 +247,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             self.file_dir = os.path.join(self.base_dir, 'data', 'file')
             self.cover_dir = os.path.join(self.base_dir, 'data', 'cover')
             
-            is_connected = self.is_connect_to_this_device() # Corrected spelling
+            is_connected = self.is_connect_to_this_device()
             self.log.info(f"ANX Device: detect_managed_devices.is_connect_to_this_device() returned: {is_connected}")
             
             if is_connected:
@@ -287,7 +257,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             else:
                 self.log.warning(f"ANX Device path is valid, but connection check failed for: {device_path}")
         else:
-            self.log.info(f"ANX Device: No valid device path configured or path does not exist: {device_path}")
+            self.log.info("ANX Device: No valid device path configured or path does not exist: %s", device_path)
         self.seen_device = False
         return False
 
@@ -298,20 +268,13 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         return False # Return False as no device was successfully opened by this debug method
 
     def get_plugged_devices(self, all_devices):
-        # This method is not used when MANAGES_DEVICE_PRESENCE is True,
-        # but is kept as a fallback or for compatibility.
-        # Remarkable plugin does not implement this.
         self.log.info("ANX Device: get_plugged_devices called (should not be called if MANAGES_DEVICE_PRESENCE is True).")
         return []
 
     def set_progress_reporter(self, report_progress):
         self.report_progress = report_progress # Assign to self.report_progress
 
-    def get_device_information(self, end_session=True): # Add end_session parameter
-        # Returns (device name, device version, software version on device, MIME type, drive information dictionary (optional))
-        # For a folder based device, device version can be a placeholder.
-        # Software version can also be a placeholder.
-        # MIME type is typically 'application/x-kindle-ebook' or similar, but for a generic folder, it's not strictly defined.
+    def get_device_information(self, end_session=True):
         return self.gui_name, 'ANX', '1.0.0', 'application/octet-stream', {'path': self.base_dir}
 
     def get_book_formats(self, book_id):
@@ -426,24 +389,47 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 self.log.info(f"Book '{title}' successfully added to ANX device database with ID: {book_id_from_db}.")
                 sent_count += 1
 
-                anx_book_metadata = AnxBookMetadata(
-                    title=title,
-                    authors=[author],
-                    uuid=f"anx_book_{book_id_from_db}",
-                    path=dest_file_path,
-                    has_cover=True if cover_path_abs else False,
-                    format_map={fmt.upper(): file_size}, # Use the obtained file_size
-                    device_id=self.uuid,
-                    size=file_size # Explicitly set size
+                # Create a USBMS.Book object directly
+                lpath = os.path.relpath(dest_file_path, self.base_dir)
+                book = USBMSBook( # Use USBMSBook
+                    prefix=self.base_dir,
+                    lpath=lpath,
+                    size=file_size,
                 )
-                anx_book_metadata.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': cover_path_abs or ''})
-                anx_book_metadata.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5_val or ''})
+                book.datetime = datetime.utcnow().timetuple()[:6] # Set datetime attribute as a time tuple
+                book.is_dir = False # Set is_dir attribute after creation
+                book.is_readonly = True # Set is_readonly attribute after creation
+                
+                # Store ANX specific metadata as user_metadata
+                book.set_user_metadata('#anx_db_id', {'datatype': 'int', 'is_multiple': False, '#value#': book_id_from_db})
+                book.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5_val or ''})
+                book.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': cover_path_abs or ''})
 
-                self.books_in_device[anx_book_metadata.uuid] = anx_book_metadata
-                self.booklist.add_book(anx_book_metadata, None)
+                # Populate standard Book attributes
+                book.title = title
+                book.authors = [author]
+                book.uuid = f"anx_book_{book_id_from_db}" # Calibre expects a UUID for each book
+                book.has_cover = True if cover_path_abs else False
+                book.format_map = {fmt.upper(): file_size}
+                book.device_id = self.uuid
+                book.in_library = False
+                book.device_collections = [] # Initialize as empty list
+
+                if book.has_cover and os.path.exists(cover_path_abs):
+                    try:
+                        with open(cover_path_abs, 'rb') as f:
+                            book.thumbnail = f.read()
+                    except Exception as ce:
+                        self.log.error(f"Error loading thumbnail for {title}: {ce}")
+                        book.thumbnail = None
+                else:
+                    book.thumbnail = None
+
+                self.books_in_device[book.uuid] = book
+                self.booklist.add_book(book, None) # Add to USBMS's BookList immediately
 
                 # Append (filepath, on_card) for USBMS.add_books_to_metadata
-                locations.append((dest_file_path, on_card))
+                locations.append((dest_file_path, None)) # Changed 'on_card' to None for virtual device
 
             except Exception as e:
                 self.log.error(f"Error sending book {book_id}: {e}")
@@ -452,7 +438,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 continue
         
         self.report_progress(1.0, 'Finished sending books.')
-        return (locations, None, None)
+        return locations # Return only locations list
 
     def delete_books(self, book_ids, callback=None, end_session=True):
         self.log.info(f"ANX Device: delete_books called with book_ids: {book_ids}")
@@ -463,33 +449,28 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             self.log.error("ANX Device not connected. Cannot delete books.")
             return []
 
-        # Create a mapping from file path to AnxBookMetadata for efficient lookup
-        books_to_delete_map = {}
-        for book_meta in self.booklist:
-            # Normalize path for comparison (e.g., ensure consistent separators)
-            normalized_path = os.path.normpath(book_meta.path)
-            books_to_delete_map[normalized_path] = book_meta
-            books_to_delete_map[book_meta.uuid] = book_meta # Also map by UUID
-
         books_to_remove_from_db = []
+        books_to_remove_from_cache = []
 
         self.log.info(f"ANX Device: Current books in device cache (paths): {[os.path.normpath(b.path) for b in self.booklist]}")
         self.log.info(f"ANX Device: Current books in device cache (UUIDs): {[b.uuid for b in self.booklist]}")
+
+        # Build a temporary map for efficient lookup based on UUID or normalized path
+        temp_book_map = {b.uuid: b for b in self.booklist}
+        for b in self.booklist:
+            temp_book_map[os.path.normpath(b.path)] = b
 
         for item_to_delete in book_ids:
             self.log.info(f"ANX Device: Attempting to delete item: {item_to_delete}")
             book_to_delete = None
 
-            # Try to find by normalized path first
-            normalized_item = os.path.normpath(item_to_delete)
-            book_to_delete = books_to_delete_map.get(normalized_item)
-
+            # Try to find by UUID first, then by normalized path
+            book_to_delete = temp_book_map.get(item_to_delete)
             if not book_to_delete:
-                # If not found by path, try to find by UUID
-                book_to_delete = books_to_delete_map.get(item_to_delete)
+                book_to_delete = temp_book_map.get(os.path.normpath(item_to_delete))
 
             if book_to_delete:
-                # Use the absolute paths directly from AnxBookMetadata's user metadata
+                # Use the absolute paths directly from USBMSBook's attributes
                 book_path = book_to_delete.path
                 cover_meta = book_to_delete.get_user_metadata('#anx_cover_path', make_copy=False)
                 cover_path = cover_meta.get('#value#') if isinstance(cover_meta, dict) else None
@@ -515,6 +496,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                         self.log.error(f"ANX Device: Error deleting cover file {cover_path}: {e}", exc_info=True)
 
                 books_to_remove_from_db.append(book_to_delete)
+                books_to_remove_from_cache.append(book_to_delete) # Mark for removal from cache
             else:
                 self.log.warning(f"ANX Device: Book or path '{item_to_delete}' not found in device cache. Skipping deletion.")
 
@@ -525,10 +507,15 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 for book in books_to_remove_from_db:
-                    # Assuming UUID is stored as 'anx_book_ID'
-                    anx_book_id = book.uuid.replace('anx_book_', '')
-                    cursor.execute("DELETE FROM tb_books WHERE id = ?", (anx_book_id,))
-                    self.log.info(f"ANX Device: Deleted book with ANX ID {anx_book_id} from database.")
+                    # Retrieve ANX DB ID from user_metadata
+                    anx_db_id_meta = book.get_user_metadata('#anx_db_id', make_copy=False)
+                    anx_db_id = anx_db_id_meta.get('#value#') if isinstance(anx_db_id_meta, dict) else None
+
+                    if anx_db_id is not None:
+                        cursor.execute("DELETE FROM tb_books WHERE id = ?", (anx_db_id,))
+                        self.log.info(f"ANX Device: Deleted book with ANX DB ID {anx_db_id} from database.")
+                    else:
+                        self.log.warning(f"ANX Device: Could not find #anx_db_id in user_metadata for book {book.uuid}. Skipping DB deletion.")
                 conn.commit()
             except Exception as e:
                 self.log.error(f"ANX Device: Error deleting books from database: {e}", exc_info=True)
@@ -536,12 +523,9 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 if conn:
                     conn.close()
 
-        # Update internal booklist
-        for book in books_to_remove_from_db:
-            if book.uuid in self.books_in_device:
-                del self.books_in_device[book.uuid]
-            self.booklist.remove_book(book)
-            self.log.info(f"ANX Device: Removed book {book.title} ({book.uuid}) from internal booklist.")
+        # Call remove_books_from_metadata to update USBMS's internal booklist
+        # This will trigger Calibre GUI to refresh
+        self.remove_books_from_metadata([b.uuid for b in books_to_remove_from_cache], [self.booklist])
 
         self.report_progress(1.0, 'Finished deleting books.')
         return True # Return True for success, as per interface for USBMS.delete_books
@@ -572,17 +556,9 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         return 'EBOOK'
 
     def get_metadata(self, book_id, allow_cache=True):
-        anx_book = self.books_in_device.get(book_id)
-        if anx_book:
-            mi = Metadata()
-            mi.title = anx_book.title
-            mi.authors = anx_book.authors
-            mi.uuid = anx_book.uuid
-            mi.has_cover = anx_book.has_cover
-            mi.path = anx_book.path
-            mi.device_id = anx_book.device_id
-            mi.format_map = anx_book.format_map
-            return mi
+        book = self.books_in_device.get(book_id) # This is now a Book object
+        if book:
+            return book # Book object already contains all necessary metadata and inherits from Metadata
         return None
 
     def get_file(self, book_id, fmt, allow_cache=True):
@@ -630,31 +606,34 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
 
     @classmethod
     def remove_books_from_metadata(cls, paths, booklists):
-        anx_booklist = booklists[0]
+        # This method is called by USBMS after successful deletion.
+        # We don't need to perform file/DB deletion here, only update the in-memory booklists.
+        usbms_booklist = booklists[0] # This is the actual BookList instance from USBMS
         
         to_remove_uuids = []
         for p in paths:
+            # Try to find by UUID first
             if p.startswith('anx_book_'):
                 to_remove_uuids.append(p)
-            elif ':' in p:
+            elif ':' in p: # Handle cases like 'card:/uuid'
                 parts = p.split(':')
                 if len(parts) > 1 and parts[1].startswith('anx_book_'):
                     to_remove_uuids.append(parts[1])
-            else:
-                for book_uuid in list(anx_booklist.uuids_in_list):
-                    anx_book = anx_booklist.books_by_uuid.get(book_uuid)
-                    if anx_book and anx_book.path == p:
-                        to_remove_uuids.append(anx_book.uuid)
+            else: # Assume it's a path, try to find corresponding book
+                # Iterate through the actual BookList provided by USBMS
+                for book in usbms_booklist:
+                    # For USBMS.Book, the path is absolute (prefix + lpath)
+                    # Need to compare full paths for accuracy
+                    full_book_path_from_usbms = os.path.normpath(os.path.join(book.prefix, book.lpath))
+                    if full_book_path_from_usbms == os.path.normpath(p):
+                        to_remove_uuids.append(book.uuid)
                         break
-
-        updated_books_in_list = []
-        for book_uuid in list(anx_booklist.uuids_in_list):
-            if book_uuid not in to_remove_uuids:
-                updated_books_in_list.append(anx_booklist.books_by_uuid[book_uuid])
+        # Rebuild the booklist without the removed books
+        books_after_removal = [book for book in usbms_booklist if book.uuid not in to_remove_uuids]
         
-        anx_booklist.clear()
-        for book in updated_books_in_list:
-            anx_booklist.add_book(book, None)
+        usbms_booklist.clear()
+        for book in books_after_removal:
+            usbms_booklist.add_book(book, None)
 
     def upload_books(self, files, names, on_card=None, end_session=True, metadata=None):
         sent_count = 0
@@ -680,7 +659,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 fmt = os.path.splitext(src_path)[1].lstrip('.').lower()
                 if not fmt:
                     fmt = 'epub'
-
+                # Ensure the filename is based on sanitized title and author
                 filename = f"{sanitized_title} - {sanitized_author}.{fmt}"
                 dest_file_path = os.path.join(self.file_dir, filename)
 
@@ -693,6 +672,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 file_md5 = hashlib.md5(open(dest_file_path, 'rb').read()).hexdigest()
 
                 cover_path_rel = ""
+                # Ensure cover filename is based on sanitized title and author
                 cover_filename = f"{sanitized_title} - {sanitized_author}.jpg"
                 dest_cover_path = os.path.join(self.cover_dir, cover_filename)
                 
@@ -739,22 +719,46 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 self.log.info(f"Book '{title}' successfully added to ANX device database with ID: {book_id_from_db}.")
                 sent_count += 1
 
-                anx_book_metadata = AnxBookMetadata(
-                    title=title,
-                    authors=[author],
-                    uuid=f"anx_book_{book_id_from_db}",
-                    path=dest_file_path,
-                    has_cover=True if cover_path_rel else False,
-                    format_map={fmt.upper(): os.path.getsize(dest_file_path)},
-                    device_id=self.uuid,
-                    size=os.path.getsize(dest_file_path) # Ensure size is set from actual file
+                # Create a USBMS.Book object directly
+                lpath = os.path.relpath(dest_file_path, self.base_dir)
+                book = USBMSBook( # Use USBMSBook
+                    prefix=self.base_dir,
+                    lpath=lpath,
+                    size=os.path.getsize(dest_file_path),
                 )
-                anx_book_metadata.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': dest_cover_path or ""})
-                anx_book_metadata.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ""})
-                self.books_in_device[anx_book_metadata.uuid] = anx_book_metadata
-                self.booklist.add_book(anx_book_metadata, None)
+                book.datetime = datetime.utcnow().timetuple()[:6] # Set datetime attribute as a time tuple
+                book.is_dir = False # Set is_dir attribute after creation
+                book.is_readonly = True # Set is_readonly attribute after creation
 
-                locations.append((dest_file_path, on_card)) # Return (filepath, on_card) for USBMS.add_books_to_metadata
+                # Store ANX specific metadata as user_metadata
+                book.set_user_metadata('#anx_db_id', {'datatype': 'int', 'is_multiple': False, '#value#': book_id_from_db})
+                book.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ''})
+                book.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': dest_cover_path or ''})
+
+                # Populate standard Book attributes
+                book.title = title
+                book.authors = [author]
+                book.uuid = f"anx_book_{book_id_from_db}" # Calibre expects a UUID for each book
+                book.has_cover = True if cover_path_rel else False
+                book.format_map = {fmt.upper(): os.path.getsize(dest_file_path)}
+                book.device_id = self.uuid
+                book.in_library = False
+                book.device_collections = [] # Initialize as empty list
+
+                if book.has_cover and os.path.exists(dest_cover_path):
+                    try:
+                        with open(dest_cover_path, 'rb') as f:
+                            book.thumbnail = f.read()
+                    except Exception as ce:
+                        self.log.error(f"Error loading thumbnail for {title}: {ce}")
+                        book.thumbnail = None
+                else:
+                    book.thumbnail = None
+
+                self.books_in_device[book.uuid] = book
+                self.booklist.add_book(book, None)
+                # The 'on_card' variable is not defined in this scope. Assuming it should be None or 'main' for a virtual device.
+                locations.append((dest_file_path, None)) # Changed 'on_card' to None for virtual device
 
             except Exception as e:
                 self.log.error(f"Error sending book {os.path.basename(src_path)}: {e}") # Use src_path for logging
@@ -763,13 +767,10 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 continue
         
         self.report_progress(1.0, 'Finished sending books.')
-        # After sending books, force a refresh of the device view in Calibre GUI
-        if self.gui:
-            self.gui.device_manager.refresh_devices()
-            self.log.info("ANX Device: Triggered GUI device refresh after sending books.")
         return locations # Return only locations list
 
-    def books(self, oncard=None, end_session=True): # Add end_session parameter
+    def books(self, oncard=None, end_session=True):
+        # Return USBMS's internal booklist directly
         return self.booklist
 
     def get_device_uid(self):
@@ -787,10 +788,12 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             self.log.info(f"ANX Device: Added {uid} to blacklist.")
         
         # Reset plugin state as per interface documentation
+        # Reset plugin state as per interface documentation
         self.seen_device = False
         self.connected = False
-        self.books_in_device = {}
-        self.booklist.clear()
+        # USBMS base class handles clearing its internal books_in_device and booklist on disconnect/ignore
+        # self.books_in_device.clear() # No need to clear here, USBMS handles it
+        # self.booklist.clear() # No need to clear here, USBMS handles it
 
     def get_user_blacklisted_devices(self):
         # Return a dictionary of blacklisted devices (UID -> friendly name).
@@ -815,36 +818,42 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
 
             # Add all books as files under the 'books' directory if recurse is True
             if recurse:
-                for book_uuid, book_meta in self.books_in_device.items():
+                for book_uuid, book_meta in self.books_in_device.items(): # Iterate over USBMS's books_in_device
                     file_name = os.path.basename(book_meta.path)
                     file_path_on_device = os.path.join(books_dir_path, file_name)
+                    # For USBMS.Book objects, datetime is a time.struct_time, need to convert to timestamp
+                    ctime = time.mktime(book_meta.datetime) if isinstance(book_meta.datetime, time.struct_time) else 0
+                    wtime = ctime # Assuming ctime and wtime are the same for simplicity
                     files_in_root.append(AnxFile(
                         file_name,
                         file_path_on_device,
                         is_dir=False,
                         size=book_meta.size,
-                        ctime=book_meta.datetime.timestamp(),
-                        wtime=book_meta.datetime.timestamp()
+                        ctime=time.mktime(book_meta.datetime.timetuple()) if book_meta.datetime else 0, # Convert datetime object to timestamp
+                        wtime=time.mktime(book_meta.datetime.timetuple()) if book_meta.datetime else 0
                     ))
-            results.append((path, files_in_root))
-        
-        # If a specific directory like '/books' is requested and not recursing
-        elif path.endswith('/books') or path.endswith('/books/'):
-            files_in_books = []
-            for book_uuid, book_meta in self.books_in_device.items():
-                file_name = os.path.basename(book_meta.path)
-                file_path_on_device = os.path.join(path, file_name)
-                files_in_books.append(AnxFile(
-                    file_name,
-                    file_path_on_device,
-                    is_dir=False,
-                    size=book_meta.size,
-                    ctime=book_meta.datetime.timestamp(),
-                    wtime=book_meta.datetime.timestamp()
-                ))
-            results.append((path, files_in_books))
-        
-        return results
+                results.append((path, files_in_root))
+            
+            # If a specific directory like '/books' is requested and not recursing
+            elif path.endswith('/books') or path.endswith('/books/'):
+                files_in_books = []
+                for book_uuid, book_meta in self.books_in_device.items(): # Iterate over USBMS's books_in_device
+                    file_name = os.path.basename(book_meta.path)
+                    file_path_on_device = os.path.join(path, file_name)
+                    # For USBMS.Book objects, datetime is a datetime object, need to convert to timestamp
+                    ctime = time.mktime(book_meta.datetime.timetuple()) if book_meta.datetime else 0
+                    wtime = time.mktime(book_meta.datetime.timetuple()) if book_meta.datetime else 0
+                    files_in_books.append(AnxFile(
+                        file_name,
+                        file_path_on_device,
+                        is_dir=False,
+                        size=book_meta.size,
+                        ctime=ctime,
+                        wtime=wtime
+                    ))
+                results.append((path, files_in_books))
+            
+            return results
 
     def do_user_manual(self, gui):
         self.gui.job_manager.show_message('ANX Device Plugin: Manage ebooks in your custom ANX folder structure. Configure the device path in Calibre Preferences -> Plugins -> Device Plugins -> ANX Virtual Device -> Customize plugin.')
