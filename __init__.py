@@ -821,29 +821,10 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 for book_uuid, book_meta in self.books_in_device.items(): # Iterate over USBMS's books_in_device
                     file_name = os.path.basename(book_meta.path)
                     file_path_on_device = os.path.join(books_dir_path, file_name)
-                    # For USBMS.Book objects, datetime is a time.struct_time, need to convert to timestamp
-                    ctime = time.mktime(book_meta.datetime) if isinstance(book_meta.datetime, time.struct_time) else 0
+                    # For USBMS.Book objects, datetime is a time.struct_time, already a tuple
+                    ctime = time.mktime(book_meta.datetime) if book_meta.datetime else 0
                     wtime = ctime # Assuming ctime and wtime are the same for simplicity
                     files_in_root.append(AnxFile(
-                        file_name,
-                        file_path_on_device,
-                        is_dir=False,
-                        size=book_meta.size,
-                        ctime=time.mktime(book_meta.datetime.timetuple()) if book_meta.datetime else 0, # Convert datetime object to timestamp
-                        wtime=time.mktime(book_meta.datetime.timetuple()) if book_meta.datetime else 0
-                    ))
-                results.append((path, files_in_root))
-            
-            # If a specific directory like '/books' is requested and not recursing
-            elif path.endswith('/books') or path.endswith('/books/'):
-                files_in_books = []
-                for book_uuid, book_meta in self.books_in_device.items(): # Iterate over USBMS's books_in_device
-                    file_name = os.path.basename(book_meta.path)
-                    file_path_on_device = os.path.join(path, file_name)
-                    # For USBMS.Book objects, datetime is a datetime object, need to convert to timestamp
-                    ctime = time.mktime(book_meta.datetime.timetuple()) if book_meta.datetime else 0
-                    wtime = time.mktime(book_meta.datetime.timetuple()) if book_meta.datetime else 0
-                    files_in_books.append(AnxFile(
                         file_name,
                         file_path_on_device,
                         is_dir=False,
@@ -851,6 +832,25 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                         ctime=ctime,
                         wtime=wtime
                     ))
+            results.append((path, files_in_root))
+        
+        # If a specific directory like '/books' is requested and not recursing
+        elif path.endswith('/books') or path.endswith('/books/'):
+            files_in_books = []
+            for book_uuid, book_meta in self.books_in_device.items(): # Iterate over USBMS's books_in_device
+                file_name = os.path.basename(book_meta.path)
+                file_path_on_device = os.path.join(path, file_name)
+                # For USBMS.Book objects, datetime is a time.struct_time, already a tuple
+                ctime = time.mktime(book_meta.datetime) if book_meta.datetime else 0
+                wtime = ctime # Assuming ctime and wtime are the same for simplicity
+                files_in_books.append(AnxFile(
+                    file_name,
+                    file_path_on_device,
+                    is_dir=False,
+                    size=book_meta.size,
+                    ctime=ctime,
+                    wtime=wtime
+                ))
                 results.append((path, files_in_books))
             
             return results
