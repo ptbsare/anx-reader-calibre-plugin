@@ -69,14 +69,14 @@ class AnxBookMetadata(Metadata): # Inherit from Metadata
         self.has_cover = has_cover
         self.format_map = format_map
         self.device_id = device_id
-        self.datetime = dt_obj if dt_obj is not None else datetime.utcnow() # Use dt_obj to avoid name collision
+        self.datetime = dt_obj if isinstance(dt_obj, tuple) else (dt_obj.timetuple()[:6] if dt_obj is not None else datetime.utcnow().timetuple()[:6]) # Ensure datetime is a tuple
         self.size = sum(format_map.values()) # Calculate size from format_map
         self.thumbnail = thumbnail
         self.tags = tags if tags is not None else []
-        self.cover_path = cover_path
-        self.file_md5 = file_md5
+        # Store cover_path and file_md5 as user metadata as they are not standard Metadata attributes
+        self.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': cover_path or ''})
+        self.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ''})
         self.device_collections = [] # Add device_collections attribute
-        # Remove get() and get_all_user_metadata() as they are provided by Metadata base class
 
 
 class AnxDevicePlugin(USBMS): # Change base class to USBMS
@@ -247,10 +247,11 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     size=file_size,
                     dt_obj=file_mtime.timetuple()[:6], # Convert datetime object to a tuple (year, month, day, hour, minute, second)
                     thumbnail=open(full_cover_path, 'rb').read() if full_cover_path and os.path.exists(full_cover_path) else None, # Fill thumbnail with cover image data
-                    tags=[],
-                    cover_path=full_cover_path,
-                    file_md5=file_md5
+                    tags=[]
                 )
+                # Set user metadata for custom fields
+                anx_book_metadata.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': full_cover_path or ''})
+                anx_book_metadata.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ''})
 
                 self.books_in_device[anx_book_metadata.uuid] = anx_book_metadata
                 self.booklist.add_book(anx_book_metadata, None)
@@ -364,9 +365,9 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 self.log.info(f"Copied ebook from {src_path} to {dest_file_path}")
 
                 file_size = os.path.getsize(dest_file_path) # Get file size after copy
-                file_md5 = hashlib.md5(open(dest_file_path, 'rb').read()).hexdigest()
+                file_md5_val = hashlib.md5(open(dest_file_path, 'rb').read()).hexdigest()
 
-                cover_path_rel = ""
+                cover_path_abs = ""
                 # Use cover_data from the Metadata object to get the format
                 if current_metadata.cover_data and current_metadata.cover_data[1]:
                     cover_format = current_metadata.cover_data[0].lower() # e.g., 'jpeg', 'png'
@@ -379,15 +380,14 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                         cover_extension = '.gif'
 
                     cover_filename = f"{sanitized_title} - {sanitized_author}{cover_extension}"
-                    dest_cover_path = os.path.join(self.cover_dir, cover_filename)
+                    cover_path_abs = os.path.join(self.cover_dir, cover_filename)
                     try:
-                        with open(dest_cover_path, 'wb') as f:
+                        with open(cover_path_abs, 'wb') as f:
                             f.write(current_metadata.cover_data[1])
-                        cover_path_rel = os.path.relpath(dest_cover_path, self.base_dir)
-                        self.log.info(f"Copied cover to {dest_cover_path} with format {cover_format}.")
+                        self.log.info(f"Copied cover to {cover_path_abs} with format {cover_format}.")
                     except Exception as ce:
-                        self.log.error(f"Error copying cover data to {dest_cover_path}: {ce}")
-                        cover_path_rel = "" # Reset cover_path_rel if copy fails
+                        self.log.error(f"Error copying cover data to {cover_path_abs}: {ce}")
+                        cover_path_abs = "" # Reset cover_path_abs if copy fails
                 else:
                     self.log.warning(f"No cover data found for book {title}.")
 
@@ -395,15 +395,16 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 cursor = conn.cursor()
                 current_time = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
-                cursor.execute("SELECT id FROM tb_books WHERE file_md5 = ?;", (file_md5,))
+                cursor.execute("SELECT id FROM tb_books WHERE file_md5 = ?;", (file_md5_val,))
                 existing_book = cursor.fetchone()
 
                 if existing_book:
-                    self.log.info(f"Book '{title}' with MD5 '{file_md5}' already exists in device DB. Skipping insert.")
+                    self.log.info(f"Book '{title}' with MD5 '{file_md5_val}' already exists in device DB. Skipping insert.")
                     conn.close()
                     continue
                 
                 file_relative_path = os.path.relpath(dest_file_path, self.base_dir)
+                cover_relative_path = os.path.relpath(cover_path_abs, self.base_dir) if cover_path_abs else ""
 
                 sql_insert = """
                 INSERT INTO tb_books (title, cover_path, file_path, author, create_time, update_time, file_md5, last_read_position, reading_percentage, is_deleted, rating, group_id, description)
@@ -411,12 +412,12 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 """
                 cursor.execute(sql_insert, (
                     title,
-                    cover_path_rel,
+                    cover_relative_path,
                     file_relative_path,
                     author,
                     current_time,
                     current_time,
-                    file_md5,
+                    file_md5_val,
                     '', 0.0, 0, 0.0, 0, ''
                 ))
                 conn.commit()
@@ -430,13 +431,14 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     authors=[author],
                     uuid=f"anx_book_{book_id_from_db}",
                     path=dest_file_path,
-                    has_cover=True if cover_path_rel else False,
+                    has_cover=True if cover_path_abs else False,
                     format_map={fmt.upper(): file_size}, # Use the obtained file_size
                     device_id=self.uuid,
-                    cover_path=cover_path_rel,
-                    file_md5=file_md5,
                     size=file_size # Explicitly set size
                 )
+                anx_book_metadata.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': cover_path_abs or ''})
+                anx_book_metadata.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5_val or ''})
+
                 self.books_in_device[anx_book_metadata.uuid] = anx_book_metadata
                 self.booklist.add_book(anx_book_metadata, None)
 
@@ -487,10 +489,11 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 book_to_delete = books_to_delete_map.get(item_to_delete)
 
             if book_to_delete:
-                # Use the absolute paths directly from AnxBookMetadata
+                # Use the absolute paths directly from AnxBookMetadata's user metadata
                 book_path = book_to_delete.path
-                cover_path = book_to_delete.cover_path
-                self.log.info(f"ANX Device: Found book in cache. Path: {book_path}, Cover Path: {cover_path}")
+                cover_meta = book_to_delete.get_user_metadata('#anx_cover_path', make_copy=False)
+                cover_path = cover_meta.get('#value#') if isinstance(cover_meta, dict) else None
+                self.log.info(f"ANX Device: Found book in cache. Path: {book_path}, Cover Path (from user metadata): {cover_path}")
 
                 # Delete file
                 if os.path.exists(book_path):
@@ -590,9 +593,10 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
 
     def get_cover(self, book_id, as_file=False):
         book = self.books_in_device.get(book_id)
-        if book and book.has_cover and book.cover_path:
-            cover_path = book.cover_path # It's already an absolute path from load_books_from_device
-            if os.path.exists(cover_path):
+        if book and book.has_cover:
+            cover_meta = book.get_user_metadata('#anx_cover_path', make_copy=False)
+            cover_path = cover_meta.get('#value#') if isinstance(cover_meta, dict) else None
+            if cover_path and os.path.exists(cover_path):
                 if as_file:
                     return open(cover_path, 'rb')
                 with open(cover_path, 'rb') as f:
@@ -743,9 +747,10 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     has_cover=True if cover_path_rel else False,
                     format_map={fmt.upper(): os.path.getsize(dest_file_path)},
                     device_id=self.uuid,
-                    cover_path=cover_path_rel,
-                    file_md5=file_md5
+                    size=os.path.getsize(dest_file_path) # Ensure size is set from actual file
                 )
+                anx_book_metadata.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': dest_cover_path or ""})
+                anx_book_metadata.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ""})
                 self.books_in_device[anx_book_metadata.uuid] = anx_book_metadata
                 self.booklist.add_book(anx_book_metadata, None)
 
