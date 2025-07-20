@@ -170,10 +170,19 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            cursor.execute("SELECT id, title, author, file_path, cover_path, file_md5 FROM tb_books WHERE is_deleted = 0;")
+            # Select all columns from tb_books to store in user_metadata
+            cursor.execute("""
+                SELECT id, title, author, file_path, cover_path, file_md5,
+                       create_time, update_time, last_read_position,
+                       reading_percentage, is_deleted, rating, group_id, description
+                FROM tb_books WHERE is_deleted = 0;
+            """)
             
             for row in cursor.fetchall():
-                book_id, title, author, file_path_rel, cover_path_rel, file_md5 = row
+                (book_id, title, author, file_path_rel, cover_path_rel, file_md5,
+                 create_time, update_time, last_read_position,
+                 reading_percentage, is_deleted, rating, group_id, description) = row
+                
                 self.log.debug(f"ANX Device: load_books_from_device - book_id: {book_id}, cover_path_rel from DB: {cover_path_rel}")
                 
                 full_file_path = os.path.join(self.file_dir, os.path.basename(file_path_rel))
@@ -197,10 +206,19 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 book.is_dir = False # Set is_dir attribute after creation
                 book.is_readonly = True # Set is_readonly attribute after creation
 
-                # Store ANX specific metadata as user_metadata
+                # Store ANX specific metadata as user_metadata, including all extended attributes
                 book.set_user_metadata('#anx_db_id', {'datatype': 'int', 'is_multiple': False, '#value#': book_id})
-                book.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ''})
+                book.set_user_metadata('#anx_file_path', {'datatype': 'text', 'is_multiple': False, '#value#': file_path_rel or ''})
                 book.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': full_cover_path or ''})
+                book.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ''})
+                book.set_user_metadata('#anx_create_time', {'datatype': 'datetime', 'is_multiple': False, '#value#': create_time or ''})
+                book.set_user_metadata('#anx_update_time', {'datatype': 'datetime', 'is_multiple': False, '#value#': update_time or ''})
+                book.set_user_metadata('#anx_last_read_position', {'datatype': 'text', 'is_multiple': False, '#value#': last_read_position or ''})
+                book.set_user_metadata('#anx_reading_percentage', {'datatype': 'float', 'is_multiple': False, '#value#': reading_percentage or 0.0})
+                book.set_user_metadata('#anx_is_deleted', {'datatype': 'int', 'is_multiple': False, '#value#': is_deleted or 0})
+                book.set_user_metadata('#anx_rating', {'datatype': 'float', 'is_multiple': False, '#value#': rating or 0.0})
+                book.set_user_metadata('#anx_group_id', {'datatype': 'int', 'is_multiple': False, '#value#': group_id or 0})
+                book.set_user_metadata('#anx_description', {'datatype': 'text', 'is_multiple': False, '#value#': description or ''})
 
                 # Populate standard Book attributes from DB
                 book.title = title
@@ -684,19 +702,35 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 
                 file_relative_path = os.path.relpath(dest_file_path, self.base_dir)
 
+                # Extract extended attributes from book_data
+                # Provide default values if attributes are not present in book_data
+                create_time = book_data.get('create_time', current_time)
+                update_time = book_data.get('update_time', current_time)
+                last_read_position = book_data.get('last_read_position', '')
+                reading_percentage = book_data.get('reading_percentage', 0.0)
+                # is_deleted is always 0 for new books
+                rating = book_data.get('rating', 0.0)
+                group_id = book_data.get('group_id', 0)
+                description = book_data.get('description', '')
+
                 sql_insert = """
-                INSERT INTO tb_books (title, cover_path, file_path, author, create_time, update_time, file_md5, last_read_position, reading_percentage, is_deleted, rating, group_id, description) 
+                INSERT INTO tb_books (title, cover_path, file_path, author, create_time, update_time, file_md5, last_read_position, reading_percentage, is_deleted, rating, group_id, description)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """
                 cursor.execute(sql_insert, (
-                    title, 
-                    cover_path_rel, 
-                    file_relative_path, 
-                    author, 
-                    current_time, 
-                    current_time, 
-                    file_md5, 
-                    '', 0.0, 0, 0.0, 0, ''
+                    title,
+                    cover_path_rel,
+                    file_relative_path,
+                    author,
+                    create_time,
+                    update_time,
+                    file_md5,
+                    last_read_position,
+                    reading_percentage,
+                    0, # is_deleted is 0 for new books
+                    rating,
+                    group_id,
+                    description
                 ))
                 conn.commit()
                 book_id_from_db = cursor.lastrowid
@@ -716,10 +750,19 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 book.is_dir = False # Set is_dir attribute after creation
                 book.is_readonly = True # Set is_readonly attribute after creation
 
-                # Store ANX specific metadata as user_metadata
+                # Store ANX specific metadata as user_metadata, including all extended attributes
                 book.set_user_metadata('#anx_db_id', {'datatype': 'int', 'is_multiple': False, '#value#': book_id_from_db})
-                book.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ''})
+                book.set_user_metadata('#anx_file_path', {'datatype': 'text', 'is_multiple': False, '#value#': file_relative_path or ''})
                 book.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': dest_cover_path or ''})
+                book.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ''})
+                book.set_user_metadata('#anx_create_time', {'datatype': 'datetime', 'is_multiple': False, '#value#': create_time or ''})
+                book.set_user_metadata('#anx_update_time', {'datatype': 'datetime', 'is_multiple': False, '#value#': update_time or ''})
+                book.set_user_metadata('#anx_last_read_position', {'datatype': 'text', 'is_multiple': False, '#value#': last_read_position or ''})
+                book.set_user_metadata('#anx_reading_percentage', {'datatype': 'float', 'is_multiple': False, '#value#': reading_percentage or 0.0})
+                book.set_user_metadata('#anx_is_deleted', {'datatype': 'int', 'is_multiple': False, '#value#': 0}) # Always 0 for new books
+                book.set_user_metadata('#anx_rating', {'datatype': 'float', 'is_multiple': False, '#value#': rating or 0.0})
+                book.set_user_metadata('#anx_group_id', {'datatype': 'int', 'is_multiple': False, '#value#': group_id or 0})
+                book.set_user_metadata('#anx_description', {'datatype': 'text', 'is_multiple': False, '#value#': description or ''})
 
                 # Populate standard Book attributes
                 book.title = title
