@@ -46,3 +46,15 @@ class ConfigWidget(QWidget):
     def save_settings(self):
         # Save the current value from the QLineEdit to preferences
         prefs["device_path"] = self.path_edit.text()
+
+    def validate(self):
+        # Calibre expects a validate method in ConfigWidget for device plugins
+        # It should return True if settings are valid, False otherwise.
+        # For now, we'll assume the path is valid if not empty.
+        path = self.path_edit.text()
+        if not path:
+            # Optionally show a warning to the user if path is empty
+            # from PyQt5.QtWidgets import QMessageBox
+            # QMessageBox.warning(self, _("Invalid Path"), _("Device path cannot be empty."))
+            return False
+        return True

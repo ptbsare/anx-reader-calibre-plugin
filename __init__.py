@@ -14,6 +14,10 @@ from calibre.library import db # Import calibre.library.db
 
 # Import the custom ConfigWidget and preferences object
 from .config import ConfigWidget, prefs
+
+# Define FAKE_DEVICE_SERIAL globally for consistent use
+FAKE_DEVICE_SERIAL = 'ANX_VIRTUAL_DEVICE_PATH:'
+
 class AnxFile:
     def __init__(self, name, path, is_dir=False, size=0, ctime=0, wtime=0):
         self.name = name
@@ -86,23 +90,49 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
 
     def apply_settings(self):
         self.base_dir = prefs['device_path']
-        if self.base_dir:
-            self.db_path = os.path.join(self.base_dir, 'database7.db')
-            self.file_dir = os.path.join(self.base_dir, 'data', 'file')
-            self.cover_dir = os.path.join(self.base_dir, 'data', 'cover')
-            self.connected = self.is_connect_to_this_device()
-            if self.connected:
-                self.log.debug(f"ANX Device re-configured and connected to: {self.base_dir}")
-                self.load_books_from_device()
-                # Update USBMS internal state
-                self._main_prefix = self.base_dir + os.sep if not self.base_dir.endswith(os.sep) else self.base_dir
-                self.is_connected = True
-            else:
-                self.log.warning(f"ANX Device re-configured but not connected. Check path: {self.base_dir}")
-                self.is_connected = False # Ensure USBMS state is updated
-        else:
+        # Reset connection status initially
+        self.connected = False
+        self.is_connected = False
+        self.db_path = None
+        self.file_dir = None
+        self.cover_dir = None
+
+        if not self.base_dir:
             self.log.debug("ANX Device path not configured after saving. Please configure it in preferences.")
-            self.is_connected = False # Ensure USBMS state is updated
+            return # Exit early if base_dir is not configured
+
+        self.db_path = os.path.join(self.base_dir, 'database7.db')
+        self.file_dir = os.path.join(self.base_dir, 'data', 'file')
+        self.cover_dir = os.path.join(self.base_dir, 'data', 'cover')
+
+        # Validate paths immediately after setting them
+        if not os.path.isdir(self.base_dir):
+            self.log.warning(f"ANX Device: Base directory does not exist or is not a directory: {self.base_dir}")
+            return # Exit early if base_dir is invalid
+
+        if not os.path.isfile(self.db_path):
+            self.log.warning(f"ANX Device: Database file not found: {self.db_path}")
+            return # Exit early if db_path is invalid
+
+        if not os.path.isdir(self.file_dir):
+            self.log.warning(f"ANX Device: File directory does not exist or is not a directory: {self.file_dir}")
+            return # Exit early if file_dir is invalid
+
+        if not os.path.isdir(self.cover_dir):
+            self.log.warning(f"ANX Device: Cover directory does not exist or is not a directory: {self.cover_dir}")
+            return # Exit early if cover_dir is invalid
+
+        # If all paths are valid, proceed with connection check
+        self.connected = self.is_connect_to_this_device()
+        if self.connected:
+            self.log.debug(f"ANX Device re-configured and connected to: {self.base_dir}")
+            self.load_books_from_device()
+            # Update USBMS internal state
+            self._main_prefix = self.base_dir + os.sep if not self.base_dir.endswith(os.sep) else self.base_dir
+            self.is_connected = True
+        else:
+            self.log.warning(f"ANX Device re-configured but not connected. Check path and database: {self.base_dir}")
+            # is_connected is already False
 
     def get_gui_name(self):
         return self.gui_name
@@ -117,19 +147,59 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             only_presence=False):
         # Override USBMS's is_usb_connected to report our connection status
         # This is crucial for Calibre GUI to detect the device
+        # Ensure apply_settings has been called to set self.is_connected correctly
+        self.apply_settings() # Re-apply settings to ensure paths are set and checked
+
+        # If base_dir is not valid, ensure the device is reported as not connected
+        if not self.base_dir or not os.path.isdir(self.base_dir) or \
+           not self.db_path or not os.path.isfile(self.db_path) or \
+           not self.file_dir or not os.path.isdir(self.file_dir) or \
+           not self.cover_dir or not os.path.isdir(self.cover_dir):
+            self.connected = False
+            self.is_connected = False
+            self.log.debug(f"ANX Device: is_usb_connected - Invalid paths detected. Reporting not connected.")
+            return False, self # Explicitly return False if paths are invalid
+
         self.log.debug(f"ANX Device: is_usb_connected called. Returning {self.is_connected}, {self}")
         return self.is_connected, self
 
     def open(self, connected_device, library_uuid):
         self.log.debug(f"ANX Device: open method called for {connected_device}")
         # Ensure base_dir is set if it wasn't already (e.g., from managed detection)
-        if not self.base_dir and isinstance(connected_device, str) and connected_device.startswith(FAKE_DEVICE_SERIAL):
+        # Also ensure paths are validated
+        if isinstance(connected_device, str) and connected_device.startswith(FAKE_DEVICE_SERIAL):
             self.base_dir = connected_device.replace(FAKE_DEVICE_SERIAL, '')
             self.db_path = os.path.join(self.base_dir, 'database7.db')
             self.file_dir = os.path.join(self.base_dir, 'data', 'file')
             self.cover_dir = os.path.join(self.base_dir, 'data', 'cover')
             # Also update USBMS internal path
             self._main_prefix = self.base_dir + os.sep if not self.base_dir.endswith(os.sep) else self.base_dir
+        
+        # Validate paths after setting base_dir
+        # If any path is invalid, set connected status to False and return False
+        if not self.base_dir or not os.path.isdir(self.base_dir):
+            self.log.error(f"ANX Device: Invalid base directory during open: {self.base_dir}")
+            self.connected = False
+            self.is_connected = False
+            return False
+        
+        if not self.db_path or not os.path.isfile(self.db_path):
+            self.log.error(f"ANX Device: Database file not found during open: {self.db_path}")
+            self.connected = False
+            self.is_connected = False
+            return False
+        
+        if not self.file_dir or not os.path.isdir(self.file_dir):
+            self.log.error(f"ANX Device: File directory not found during open: {self.file_dir}")
+            self.connected = False
+            self.is_connected = False
+            return False
+        
+        if not self.cover_dir or not os.path.isdir(self.cover_dir):
+            self.log.error(f"ANX Device: Cover directory not found during open: {self.cover_dir}")
+            self.connected = False
+            self.is_connected = False
+            return False
 
         self.connected = True
         self.is_connected = True # Update USBMS internal state
@@ -139,33 +209,49 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
 
         
     def is_connect_to_this_device(self, opts=None):
-        if not self.base_dir:
+        # Ensure paths are valid before attempting DB connection
+        if not self.base_dir or not os.path.isdir(self.base_dir):
+            self.log.debug(f"ANX Device: Connection check failed. Base directory invalid: {self.base_dir}")
             return False
         
-        db_exists = os.path.exists(self.db_path)
-        file_dir_exists = os.path.isdir(self.file_dir)
-        cover_dir_exists = os.path.isdir(self.cover_dir)
+        if not self.db_path or not os.path.isfile(self.db_path):
+            self.log.debug(f"ANX Device: Connection check failed. Database file invalid: {self.db_path}")
+            return False
         
-        if db_exists and file_dir_exists and cover_dir_exists:
-            try:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tb_books';")
-                table_exists = cursor.fetchone() is not None
-                conn.close()
-                return table_exists
-            except Exception as e:
-                self.log.error(f"Error checking database: {e}")
-                return False
-        return False
+        if not self.file_dir or not os.path.isdir(self.file_dir):
+            self.log.debug(f"ANX Device: Connection check failed. File directory invalid: {self.file_dir}")
+            return False
+        
+        if not self.cover_dir or not os.path.isdir(self.cover_dir):
+            self.log.debug(f"ANX Device: Connection check failed. Cover directory invalid: {self.cover_dir}")
+            return False
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tb_books';")
+            table_exists = cursor.fetchone() is not None
+            conn.close()
+            if not table_exists:
+                self.log.warning(f"ANX Device: 'tb_books' table not found in database: {self.db_path}")
+            return table_exists
+        except Exception as e:
+            self.log.error(f"ANX Device: Error checking database {self.db_path}: {e}", exc_info=True)
+            return False
 
     def load_books_from_device(self, detected_mime=None):
         # Clear USBMS's internal booklist and books_in_device before reloading
         # These are properties of the USBMS base class
         self.books_in_device.clear()
         self.booklist.clear()
-        if not self.connected:
-            return
+        
+        # Ensure paths are valid before attempting DB connection
+        if not self.base_dir or not os.path.isdir(self.base_dir) or \
+           not self.db_path or not os.path.isfile(self.db_path) or \
+           not self.file_dir or not os.path.isdir(self.file_dir) or \
+           not self.cover_dir or not os.path.isdir(self.cover_dir):
+            self.log.error(f"ANX Device: Cannot load books. Invalid device paths detected. Base: {self.base_dir}, DB: {self.db_path}, File: {self.file_dir}, Cover: {self.cover_dir}")
+            return # Exit early if paths are invalid
         
         try:
             conn = sqlite3.connect(self.db_path)
@@ -255,31 +341,51 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
 
     def detect_managed_devices(self, devices_on_system, force_refresh=False):
         # This method is called when MANAGES_DEVICE_PRESENCE is True
-        if self.seen_device and not force_refresh:
-            return True # Device already seen and no refresh forced
+        # It should return True only if the device is actually present and ready for connection.
         
         device_path = prefs['device_path']
         self.log.debug(f"ANX Device: detect_managed_devices - configured device_path: {device_path}")
         
-        if device_path and os.path.isdir(device_path):
-            self.base_dir = device_path
-            self.db_path = os.path.join(self.base_dir, 'database7.db')
-            self.file_dir = os.path.join(self.base_dir, 'data', 'file')
-            self.cover_dir = os.path.join(self.base_dir, 'data', 'cover')
-            
-            is_connected = self.is_connect_to_this_device()
-            self.log.debug(f"ANX Device: detect_managed_devices.is_connect_to_this_device() returned: {is_connected}")
-            
-            if is_connected:
-                self.log.debug(f"ANX Device detected at: {device_path}")
-                self.seen_device = True
-                return True # Return a truthy value to indicate device found
-            else:
-                self.log.warning(f"ANX Device path is valid, but connection check failed for: {device_path}")
+        # Immediate check for valid device path
+        if not device_path or not os.path.isdir(device_path):
+            self.log.debug(f"ANX Device: No valid device path configured or path does not exist: {device_path}. Not detecting device.")
+            self.seen_device = False
+            self.connected = False
+            self.is_connected = False
+            return False # Return False if path is invalid or not configured
+        
+        # Set base_dir and sub-paths
+        self.base_dir = device_path
+        self.db_path = os.path.join(self.base_dir, 'database7.db')
+        self.file_dir = os.path.join(self.base_dir, 'data', 'file')
+        self.cover_dir = os.path.join(self.base_dir, 'data', 'cover')
+
+        # Perform comprehensive path validation before proceeding to DB check
+        if not os.path.isfile(self.db_path) or \
+           not os.path.isdir(self.file_dir) or \
+           not os.path.isdir(self.cover_dir):
+            self.log.debug(f"ANX Device: Sub-paths invalid for {self.base_dir}. Not detecting device.")
+            self.seen_device = False
+            self.connected = False
+            self.is_connected = False
+            return False # Return False if any sub-path is invalid
+
+        # If all paths are valid, then perform the full connection check using is_connect_to_this_device
+        is_connected = self.is_connect_to_this_device()
+        self.log.debug(f"ANX Device: detect_managed_devices.is_connect_to_this_device() returned: {is_connected}")
+        
+        if is_connected:
+            self.log.debug(f"ANX Device detected at: {device_path}")
+            self.seen_device = True
+            self.connected = True
+            self.is_connected = True
+            return True # Return True if device is fully connected
         else:
-            self.log.debug("ANX Device: No valid device path configured or path does not exist: %s", device_path)
-        self.seen_device = False
-        return False
+            self.log.warning(f"ANX Device path is valid, but connection check failed for: {device_path}")
+            self.seen_device = False
+            self.connected = False
+            self.is_connected = False
+            return False
 
     def debug_managed_device_detection(self, devices_on_system, output):
         self.log.debug("ANX Device: debug_managed_device_detection called.")
@@ -471,27 +577,28 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
 
     def get_icon(self):
         return None
-    
     def free_space(self, end_session=True):
-        if not self.connected:
+        if not self.base_dir or not os.path.isdir(self.base_dir):
+            self.log.debug(f"ANX Device: free_space - Invalid base directory: {self.base_dir}. Returning (0,0,0).")
             return (0, 0, 0)
         
         try:
             total, used, free = shutil.disk_usage(self.base_dir)
             return (free, total, 0)
         except Exception as e:
-            self.log.error(f"Error getting free space: {e}")
+            self.log.error(f"ANX Device: Error getting free space for {self.base_dir}: {e}", exc_info=True)
             return (0, 0, 0)
 
     def total_space(self, end_session=True):
-        if not self.connected:
+        if not self.base_dir or not os.path.isdir(self.base_dir):
+            self.log.debug(f"ANX Device: total_space - Invalid base directory: {self.base_dir}. Returning (0,0,0).")
             return (0, 0, 0)
         
         try:
             total, used, free = shutil.disk_usage(self.base_dir)
             return (total, total, 0)
         except Exception as e:
-            self.log.error(f"Error getting total space: {e}")
+            self.log.error(f"ANX Device: Error getting total space for {self.base_dir}: {e}", exc_info=True)
             return (0, 0, 0)
 
     @classmethod
