@@ -1138,7 +1138,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             except Exception as e:
                 default_log.error(f"ANX Device: Error in add_books_to_metadata for location {full_file_path}: {e}", exc_info=True)
 
-    def _get_safe_filename(self, title, author, fmt, max_len=200):
+    def _get_safe_filename(self, title, author, fmt, max_len=75):
         # Generate a base filename from title and author
         base_filename = f"{title} - {author}"
         
