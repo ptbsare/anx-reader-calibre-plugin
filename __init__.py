@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 import shutil
 
-from calibre.devices.usbms.driver import USBMS, BookList # Keep BookList for now, but ensure CollectionsBookList is used
+from calibre.devices.usbms.driver import USBMS
 from calibre.utils.config import JSONConfig
 from calibre.utils.logging import default_log
 from PyQt5.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget
@@ -425,9 +425,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         deleted_count = 0
         total_to_delete = len(book_ids)
 
-        if not self.connected:
-            self.log.error("ANX Device not connected. Cannot delete books.")
-            return []
+
 
         books_to_remove_from_db = []
         books_to_remove_from_cache = []
@@ -745,9 +743,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         sent_count = 0
         total_books = len(files)
 
-        if not self.connected:
-            self.log.error("ANX Device not connected. Cannot send books.")
-            return []
+
 
         locations = []
         for i, src_path in enumerate(files):
@@ -779,48 +775,61 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 cover_path_rel = ""
                 dest_cover_path = "" # Initialize dest_cover_path
                 
-                full_cover_data = book_data.cover_data # This should be (format, data) tuple
+                # Preferred cover extraction: Use book_data.cover_data first, then fallback to Calibre DB
                 cover_data_to_write = None
                 cover_extension = '.jpg' # Default extension
 
-                if full_cover_data and full_cover_data[1]:
-                    # If cover data is directly available from metadata
-                    cover_data_to_write = full_cover_data[1]
-                    cover_format = full_cover_data[0].lower() if full_cover_data[0] else 'jpeg'
+                # 1. Try to get cover data from book_data.cover_data (thumbnail attribute)
+                if book_data and hasattr(book_data, 'thumbnail') and book_data.thumbnail and len(book_data.thumbnail) == 3:
+                    # thumbnail is (width, height, cover_data as jpeg)
+                    cover_data_to_write = book_data.thumbnail[2] # Get the actual image data
+                    cover_extension = '.jpg' # Assuming thumbnail is always JPEG
+                    self.log.debug(f"ANX Device: upload_books - Using cover data from book_data.thumbnail.")
+                elif book_data and hasattr(book_data, 'cover_data') and book_data.cover_data and len(book_data.cover_data) == 2 and book_data.cover_data[1]:
+                    # cover_data is (format, data) tuple
+                    cover_data_to_write = book_data.cover_data[1]
+                    cover_format = book_data.cover_data[0].lower() if book_data.cover_data[0] else 'jpeg'
                     if cover_format == 'png':
                         cover_extension = '.png'
                     elif cover_format == 'gif':
                         cover_extension = '.gif'
                     self.log.debug(f"ANX Device: upload_books - Using cover data from book_data.cover_data.")
                 else:
-                    # Try to get cover path from Calibre DB using book_data.id
-                    calibre_db = db().new_api # Use db().new_api to access the Calibre database API directly
-                    self.log.debug(f"ANX Device: upload_books - book_data.id: {book_data.id}, calibre_db: {calibre_db}")
-                    
-                    # Get full metadata including cover_data
-                    # Note: book_data.id is the Calibre library ID for the book being uploaded
-                    current_metadata = calibre_db.get_metadata(book_data.id, get_cover=True)
-                    cover_rel_path = current_metadata.get('cover')
-                    
-                    if cover_rel_path:
-                        book_library_path = calibre_db.field_for('path', book_data.id)
-                        calibre_cover_path = os.path.join(book_library_path, cover_rel_path)
-                        self.log.debug(f"ANX Device: upload_books - calibre_cover_path from metadata: {calibre_cover_path}")
+                    # 2. Fallback to Calibre DB if no cover data directly in book_data
+                    try:
+                        calibre_db = db().new_api # Use db().new_api to access the Calibre database API directly
+                        self.log.debug(f"ANX Device: upload_books - book_data.id: {book_data.id}, calibre_db: {calibre_db}")
+                        
+                        # Get full metadata including cover_data
+                        current_metadata = calibre_db.get_metadata(book_data.id, get_cover=True)
+                        cover_rel_path = current_metadata.get('cover')
+                        
+                        if cover_rel_path:
+                            book_library_path = calibre_db.field_for('path', book_data.id)
+                            calibre_cover_path = os.path.join(book_library_path, cover_rel_path)
+                            self.log.debug(f"ANX Device: upload_books - calibre_cover_path from metadata: {calibre_cover_path}")
 
-                        if os.path.exists(calibre_cover_path):
-                            try:
-                                with open(calibre_cover_path, 'rb') as f:
-                                    cover_data_to_write = f.read()
-                                cover_extension = os.path.splitext(calibre_cover_path)[1].lower()
-                                self.log.debug(f"ANX Device: upload_books - Successfully read cover from {calibre_cover_path}.")
-                            except Exception as e:
-                                self.log.error(f"ANX Device: Error reading cover from {calibre_cover_path}: {e}")
-                                cover_data_to_write = None
+                            if os.path.exists(calibre_cover_path):
+                                try:
+                                    with open(calibre_cover_path, 'rb') as f:
+                                        cover_data_to_write = f.read()
+                                    cover_extension = os.path.splitext(calibre_cover_path)[1].lower()
+                                    self.log.debug(f"ANX Device: upload_books - Successfully read cover from {calibre_cover_path}.")
+                                except Exception as e:
+                                    self.log.error(f"ANX Device: Error reading cover from {calibre_cover_path}: {e}")
+                                    cover_data_to_write = None
+                            else:
+                                self.log.warning(f"ANX Device: No valid cover file found at {calibre_cover_path} for book {title} in Calibre DB.")
                         else:
-                            self.log.warning(f"ANX Device: No valid cover file found at {calibre_cover_path} for book {title} in Calibre DB.")
-                    else:
-                        self.log.warning(f"ANX Device: No cover path found in metadata for book {title} in Calibre DB.")
+                            self.log.warning(f"ANX Device: No cover path found in metadata for book {title} in Calibre DB.")
+                    except sqlite3.OperationalError as db_e:
+                        self.log.warning(f"ANX Device: Could not access Calibre DB for cover: {db_e}. This might be due to a 'database is locked' error. Skipping cover extraction from DB.")
+                        cover_data_to_write = None # Ensure cover_data_to_write is None on DB error
+                    except Exception as e:
+                        self.log.error(f"ANX Device: Unexpected error accessing Calibre DB for cover: {e}", exc_info=True)
+                        cover_data_to_write = None # Ensure cover_data_to_write is None on unexpected error
 
+                dest_cover_path = "" # Initialize dest_cover_path
                 if cover_data_to_write:
                     # Use safe_filename for cover filename as well
                     cover_filename = f"{title} - {author}{cover_extension}"
