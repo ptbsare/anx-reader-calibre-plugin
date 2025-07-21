@@ -1,0 +1,24 @@
+   name: Create Release Package
+
+   on:
+     push:
+       tags:
+         - 'v*'  # 触发条件：以 v 开头的标签（如 v1.0.0）
+
+   jobs:
+     package:
+       runs-on: ubuntu-latest
+       steps:
+       - name: Checkout Code
+         uses: actions/checkout@v4
+
+       - name: Zip Python Files
+         run: |
+           zip -r python_files.zip . -i '*.py' -x '*__pycache__*' '*.venv*' '*/env/*'
+
+       - name: Upload Release Asset
+         uses: softprops/action-gh-release@v1
+         with:
+           files: anx-reader-calibre-plugin.zip
+         env:
+           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
