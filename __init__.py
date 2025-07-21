@@ -451,8 +451,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             if book_to_delete:
                 # Use the absolute paths directly from USBMSBook's attributes
                 book_path = book_to_delete.path
-                cover_meta = book_to_delete.get_user_metadata('#anx_cover_path', make_copy=False)
-                cover_path_rel = cover_meta.get('#value#') if isinstance(cover_meta, dict) else None
+                cover_path_rel = book_to_delete.get('#anx_cover_path') # Use .get() method
                 
                 # Construct the full absolute path for the cover file
                 cover_path = os.path.join(self.base_dir, 'data', os.path.normpath(cover_path_rel)) if cover_path_rel else None
@@ -698,8 +697,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 }
 
                 for user_meta_key, (db_field_name, db_current_value, data_type) in fields_to_check.items():
-                    user_meta_val_raw = book_obj.get_user_metadata(user_meta_key, make_copy=False)
-                    user_meta_val = user_meta_val_raw.get('#value#') if isinstance(user_meta_val_raw, dict) else None
+                    user_meta_val = book_obj.get(user_meta_key) # Use .get() method
                     
                     # Type conversion for comparison
                     if data_type == 'float' and user_meta_val is not None:
@@ -915,51 +913,77 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 ))
                 conn.commit()
                 book_id_from_db = cursor.lastrowid
-                conn.close()
+                
+                # After inserting, select the full book data to construct the USBMSBook object
+                cursor.execute("""
+                    SELECT id, title, author, file_path, cover_path, file_md5,
+                           create_time, update_time, last_read_position,
+                           reading_percentage, is_deleted, rating, group_id, description
+                    FROM tb_books WHERE id = ?;
+                """, (book_id_from_db,))
+                
+                row = cursor.fetchone()
+                conn.close() # Close connection after query
+                
+                if not row:
+                    self.log.error(f"ANX Device: Failed to retrieve book with ID {book_id_from_db} after insertion. Skipping USBMSBook creation.")
+                    continue # Skip to next book if data retrieval fails
+
+                (book_id, title, author, file_path_rel, cover_path_rel, file_md5,
+                 create_time, update_time, last_read_position,
+                 reading_percentage, is_deleted, rating, group_id, description) = row
+
                 self.log.debug(f"Book '{title}' successfully added to ANX device database with ID: {book_id_from_db}.")
                 sent_count += 1
 
+                # Normalize paths from DB to current OS path style before joining
+                normalized_file_path_rel = os.path.normpath(file_path_rel)
+                normalized_cover_path_rel = os.path.normpath(cover_path_rel) if cover_path_rel else None
+
+                full_file_path = os.path.join(self.base_dir, 'data', normalized_file_path_rel)
+                full_cover_path = os.path.join(self.base_dir, 'data', normalized_cover_path_rel) if normalized_cover_path_rel else None
+
+                file_size = os.path.getsize(full_file_path) if os.path.exists(full_file_path) else 0
+                file_mtime = datetime.fromtimestamp(os.path.getmtime(full_file_path)) if os.path.exists(full_file_path) else datetime.utcnow()
+
                 # Create a USBMS.Book object directly
-                lpath = os.path.relpath(dest_file_path, self.base_dir)
+                lpath = os.path.relpath(full_file_path, self.base_dir) # Use full_file_path for relpath calculation
                 book = USBMSBook( # Use USBMSBook
                     prefix=self.base_dir,
                     lpath=lpath,
-                    size=os.path.getsize(dest_file_path),
+                    size=file_size, # Use actual file size
                 )
                 book.uuid = str(uuid.uuid4()) # Manually generate UUID
-                book.datetime = datetime.utcnow().timetuple() # Set datetime attribute as a full time tuple
+                book.datetime = file_mtime.timetuple() # Set datetime attribute as a full time tuple
                 book.is_dir = False # Set is_dir attribute after creation
                 book.is_readonly = True # Set is_readonly attribute after creation
 
                 # Store ANX specific metadata as user_metadata, including all extended attributes
-                book.set_user_metadata('#anx_db_id', {'datatype': 'int', 'is_multiple': False, '#value#': book_id_from_db})
-                book.set_user_metadata('#anx_file_path', {'datatype': 'text', 'is_multiple': False, '#value#': file_relative_path or ''})
-                book.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': dest_cover_path or ''})
+                book.set_user_metadata('#anx_db_id', {'datatype': 'int', 'is_multiple': False, '#value#': book_id})
+                book.set_user_metadata('#anx_file_path', {'datatype': 'text', 'is_multiple': False, '#value#': file_path_rel or ''})
+                book.set_user_metadata('#anx_cover_path', {'datatype': 'text', 'is_multiple': False, '#value#': cover_path_rel or ''})
                 book.set_user_metadata('#anx_file_md5', {'datatype': 'text', 'is_multiple': False, '#value#': file_md5 or ''})
                 book.set_user_metadata('#anx_create_time', {'datatype': 'datetime', 'is_multiple': False, '#value#': create_time or ''})
                 book.set_user_metadata('#anx_update_time', {'datatype': 'datetime', 'is_multiple': False, '#value#': update_time or ''})
                 book.set_user_metadata('#anx_last_read_position', {'datatype': 'text', 'is_multiple': False, '#value#': last_read_position or ''})
                 book.set_user_metadata('#anx_reading_percentage', {'datatype': 'float', 'is_multiple': False, '#value#': reading_percentage or 0.0})
-                book.set_user_metadata('#anx_is_deleted', {'datatype': 'int', 'is_multiple': False, '#value#': 1})
+                book.set_user_metadata('#anx_is_deleted', {'datatype': 'int', 'is_multiple': False, '#value#': is_deleted or 0}) # Use actual is_deleted from DB
                 book.set_user_metadata('#anx_rating', {'datatype': 'float', 'is_multiple': False, '#value#': rating or 0.0})
                 book.set_user_metadata('#anx_group_id', {'datatype': 'int', 'is_multiple': False, '#value#': group_id or 0})
                 book.set_user_metadata('#anx_description', {'datatype': 'text', 'is_multiple': False, '#value#': description or ''})
 
                 # Populate standard Book attributes
                 book.title = title
-                book.authors = [author]
-                # Calibre will assign a UUID. We will use user_metadata for our internal ID.
-                # book.uuid = f"anx_book_{book_id_from_db}" # Removed manual UUID setting
-                # default_log.debug(f"ANX Device: upload_books - Set book.uuid to: {book.uuid}") # Removed log
-                book.has_cover = True if cover_path_rel else False
-                book.format_map = {fmt.upper(): os.path.getsize(dest_file_path)}
+                book.authors = [author] if author else [_('Unknown')]
+                book.has_cover = True if full_cover_path and os.path.exists(full_cover_path) else False
+                book.format_map = {os.path.splitext(full_file_path)[1].lstrip('.').upper(): file_size}
                 book.device_id = self.uuid
                 book.in_library = False
                 book.device_collections = [] # Initialize as empty list
 
-                if book.has_cover and os.path.exists(dest_cover_path):
+                if book.has_cover and os.path.exists(full_cover_path): # Use full_cover_path here
                     try:
-                        with open(dest_cover_path, 'rb') as f:
+                        with open(full_cover_path, 'rb') as f:
                             book.thumbnail = f.read()
                     except Exception as ce:
                         self.log.error(f"Error loading thumbnail for {title}: {ce}")
@@ -970,8 +994,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 default_log.debug(f"ANX Device: upload_books - Book UUID before adding to device: {book.uuid}")
                 self.books_in_device[book.uuid] = book
                 self.booklist.add_book(book, None)
-                # The 'on_card' variable is not defined in this scope. Assuming it should be None or 'main' for a virtual device.
-                locations.append((dest_file_path, None)) # Changed 'on_card' to None for virtual device
+                locations.append((full_file_path, None)) # Changed 'on_card' to None for virtual device, use full_file_path
 
             except Exception as e:
                 self.log.error(f"Error sending book {os.path.basename(src_path)}: {e}") # Use src_path for logging
