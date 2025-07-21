@@ -5,6 +5,8 @@
        tags:
          - 'v*'  # 触发条件：以 v 开头的标签（如 v1.0.0）
 
+   permissions:
+     contents: write  # 必需权限
    jobs:
      package:
        runs-on: ubuntu-latest
