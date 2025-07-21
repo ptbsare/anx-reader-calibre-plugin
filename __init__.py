@@ -775,27 +775,28 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 cover_path_rel = ""
                 dest_cover_path = "" # Initialize dest_cover_path
                 
-                # Preferred cover extraction: Use book_data.cover_data first, then fallback to Calibre DB
                 cover_data_to_write = None
                 cover_extension = '.jpg' # Default extension
 
-                # 1. Try to get cover data from book_data.cover_data (thumbnail attribute)
-                if book_data and hasattr(book_data, 'thumbnail') and book_data.thumbnail and len(book_data.thumbnail) == 3:
-                    # thumbnail is (width, height, cover_data as jpeg)
-                    cover_data_to_write = book_data.thumbnail[2] # Get the actual image data
-                    cover_extension = '.jpg' # Assuming thumbnail is always JPEG
-                    self.log.debug(f"ANX Device: upload_books - Using cover data from book_data.thumbnail.")
-                elif book_data and hasattr(book_data, 'cover_data') and book_data.cover_data and len(book_data.cover_data) == 2 and book_data.cover_data[1]:
-                    # cover_data is (format, data) tuple
-                    cover_data_to_write = book_data.cover_data[1]
-                    cover_format = book_data.cover_data[0].lower() if book_data.cover_data[0] else 'jpeg'
-                    if cover_format == 'png':
-                        cover_extension = '.png'
-                    elif cover_format == 'gif':
-                        cover_extension = '.gif'
-                    self.log.debug(f"ANX Device: upload_books - Using cover data from book_data.cover_data.")
-                else:
-                    # 2. Fallback to Calibre DB if no cover data directly in book_data
+                # 1. Preferred cover extraction: Use book_data.cover (path to cover file)
+                if book_data and hasattr(book_data, 'cover') and book_data.cover:
+                    calibre_cover_path = book_data.cover
+                    self.log.debug(f"ANX Device: upload_books - Attempting to use book_data.cover path: {calibre_cover_path}")
+                    if os.path.exists(calibre_cover_path):
+                        try:
+                            with open(calibre_cover_path, 'rb') as f:
+                                cover_data_to_write = f.read()
+                            cover_extension = os.path.splitext(calibre_cover_path)[1].lower()
+                            self.log.debug(f"ANX Device: upload_books - Successfully read cover from book_data.cover path: {calibre_cover_path}.")
+                        except Exception as e:
+                            self.log.error(f"ANX Device: Error reading cover from book_data.cover path {calibre_cover_path}: {e}")
+                            cover_data_to_write = None
+                    else:
+                        self.log.warning(f"ANX Device: book_data.cover path does not exist: {calibre_cover_path}")
+
+                # 2. Fallback to Calibre DB if book_data.cover is not available or failed
+                if not cover_data_to_write:
+                    self.log.debug(f"ANX Device: upload_books - book_data.cover not available or failed, falling back to Calibre DB.")
                     try:
                         calibre_db = db().new_api # Use db().new_api to access the Calibre database API directly
                         self.log.debug(f"ANX Device: upload_books - book_data.id: {book_data.id}, calibre_db: {calibre_db}")
@@ -807,16 +808,16 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                         if cover_rel_path:
                             book_library_path = calibre_db.field_for('path', book_data.id)
                             calibre_cover_path = os.path.join(book_library_path, cover_rel_path)
-                            self.log.debug(f"ANX Device: upload_books - calibre_cover_path from metadata: {calibre_cover_path}")
+                            self.log.debug(f"ANX Device: upload_books - calibre_cover_path from DB metadata: {calibre_cover_path}")
 
                             if os.path.exists(calibre_cover_path):
                                 try:
                                     with open(calibre_cover_path, 'rb') as f:
                                         cover_data_to_write = f.read()
                                     cover_extension = os.path.splitext(calibre_cover_path)[1].lower()
-                                    self.log.debug(f"ANX Device: upload_books - Successfully read cover from {calibre_cover_path}.")
+                                    self.log.debug(f"ANX Device: upload_books - Successfully read cover from Calibre DB path: {calibre_cover_path}.")
                                 except Exception as e:
-                                    self.log.error(f"ANX Device: Error reading cover from {calibre_cover_path}: {e}")
+                                    self.log.error(f"ANX Device: Error reading cover from Calibre DB path {calibre_cover_path}: {e}")
                                     cover_data_to_write = None
                             else:
                                 self.log.warning(f"ANX Device: No valid cover file found at {calibre_cover_path} for book {title} in Calibre DB.")
@@ -828,6 +829,22 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     except Exception as e:
                         self.log.error(f"ANX Device: Unexpected error accessing Calibre DB for cover: {e}", exc_info=True)
                         cover_data_to_write = None # Ensure cover_data_to_write is None on unexpected error
+
+                # 3. Fallback to book_data.cover_data (format, data) tuple
+                if not cover_data_to_write and book_data and hasattr(book_data, 'cover_data') and book_data.cover_data and len(book_data.cover_data) == 2 and book_data.cover_data[1]:
+                    cover_data_to_write = book_data.cover_data[1]
+                    cover_format = book_data.cover_data[0].lower() if book_data.cover_data[0] else 'jpeg'
+                    if cover_format == 'png':
+                        cover_extension = '.png'
+                    elif cover_format == 'gif':
+                        cover_extension = '.gif'
+                    self.log.debug(f"ANX Device: upload_books - Using cover data from book_data.cover_data as a fallback.")
+
+                # 4. Fallback to book_data.thumbnail (width, height, cover_data as jpeg)
+                if not cover_data_to_write and book_data and hasattr(book_data, 'thumbnail') and book_data.thumbnail and len(book_data.thumbnail) == 3:
+                    cover_data_to_write = book_data.thumbnail[2] # Get the actual image data
+                    cover_extension = '.jpg' # Assuming thumbnail is always JPEG
+                    self.log.debug(f"ANX Device: upload_books - Using cover data from book_data.thumbnail as a last resort.")
 
                 dest_cover_path = "" # Initialize dest_cover_path
                 if cover_data_to_write:
