@@ -1133,7 +1133,11 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     book.thumbnail = None
                 
                 usbms_booklist.add_book(book, on_card_name) # Add to the booklist
-                default_log.debug(f"ANX Device: Added book {title} to device metadata.")
+                # Ensure books_in_device is updated for newly added books
+                # This is important for methods like delete_books to find the book
+                # and for load_books_from_device not to re-add it on subsequent calls.
+                self.books_in_device[book.uuid] = book
+                default_log.debug(f"ANX Device: Added book {title} to device metadata and updated books_in_device.")
 
             except Exception as e:
                 default_log.error(f"ANX Device: Error in add_books_to_metadata for location {full_file_path}: {e}", exc_info=True)
