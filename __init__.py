@@ -455,7 +455,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 
                 # Construct the full absolute path for the cover file
                 cover_path = os.path.join(self.base_dir, 'data', os.path.normpath(cover_path_rel)) if cover_path_rel else None
-                self.log.debug(f"ANX Device: Found book in cache. Path: {book_path}, Cover Path (absolute): {cover_path}")
+                self.log.debug(f"ANX Device: Found book in cache. {book_to_delete.get_all_user_metadata(make_copy=False)} Path: {book_path}, Cover Path (absolute): {cover_path}")
 
                 # Delete file
                 if os.path.exists(book_path):
@@ -488,9 +488,8 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 for book in books_to_remove_from_db:
-                    # Retrieve ANX DB ID from user_metadata
-                    anx_db_id_meta = book.get_user_metadata('#anx_db_id', make_copy=False)
-                    anx_db_id = anx_db_id_meta.get('#value#') if isinstance(anx_db_id_meta, dict) else None
+                    # Retrieve ANX DB ID
+                    anx_db_id = book.get('#anx_db_id') # Use .get() method
 
                     if anx_db_id is not None:
                         cursor.execute("DELETE FROM tb_books WHERE id = ?", (anx_db_id,))
@@ -571,8 +570,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
     def get_cover(self, book_id, as_file=False):
         book = self.books_in_device.get(book_id)
         if book and book.has_cover:
-            cover_meta = book.get_user_metadata('#anx_cover_path', make_copy=False)
-            cover_path = cover_meta.get('#value#') if isinstance(cover_meta, dict) else None
+            cover_path = book.get('#anx_cover_path')
             if cover_path and os.path.exists(cover_path):
                 if as_file:
                     return open(cover_path, 'rb')
@@ -636,9 +634,8 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         
         # Iterate through the books in the main_booklist
         for book_obj in main_booklist:
-            # Get ANX DB ID from user_metadata
-            anx_db_id_meta = book_obj.get_user_metadata('#anx_db_id', make_copy=False)
-            anx_db_id = anx_db_id_meta.get('#value#') if isinstance(anx_db_id_meta, dict) else None
+            # Get ANX DB ID
+            anx_db_id = book_obj.get('#anx_db_id') # Use .get() method
 
             if anx_db_id is None:
                 self.log.warning(f"ANX Device: sync_booklists - Could not find #anx_db_id in user_metadata for book {book_obj.uuid}. Skipping metadata update for this book.")
