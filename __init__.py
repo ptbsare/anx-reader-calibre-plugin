@@ -18,17 +18,6 @@ from .config import ConfigWidget, prefs
 # Define FAKE_DEVICE_SERIAL globally for consistent use
 FAKE_DEVICE_SERIAL = 'ANX_VIRTUAL_DEVICE_PATH:'
 
-class AnxFile:
-    def __init__(self, name, path, is_dir=False, size=0, ctime=0, wtime=0):
-        self.name = name
-        self.path = path
-        self.is_dir = is_dir
-        self.size = size
-        self.ctime = ctime
-        self.wtime = wtime
-        self.is_readonly = True # For simplicity, assume all files are read-only
-
-
 class AnxDevicePlugin(USBMS): # Change base class to USBMS
     name                = 'ANX Virtual Device'
     gui_name = _('ANX Device')
@@ -997,57 +986,6 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
         # Set the blacklisted devices.
         self.prefs['blacklisted_devices'] = devices
         self.prefs.commit() # Save changes to config file
-
-    def list(self, path, recurse=False):
-        # This method is called by calibre/devices/cli.py for 'ls' command
-        # It should return a list of tuples: (directory_path, [list of AnxFile objects])
-        self.log.debug(f"ANX Device: list method called for path: {path}, recurse: {recurse}")
-        
-        results = []
-        if path == '/' or path == 'card:/':
-            files_in_root = []
-            # Add a dummy 'books' directory
-            books_dir_path = os.path.join(path, 'books')
-            files_in_root.append(AnxFile('books', books_dir_path, is_dir=True))
-
-            # Add all books as files under the 'books' directory if recurse is True
-            if recurse:
-                for book_uuid, book_meta in self.books_in_device.items(): # Iterate over USBMS's books_in_device
-                    file_name = os.path.basename(book_meta.path)
-                    file_path_on_device = os.path.join(books_dir_path, file_name)
-                    # For USBMS.Book objects, datetime is a time.struct_time, already a tuple
-                    ctime = time.mktime(book_meta.datetime) if book_meta.datetime else 0
-                    wtime = ctime # Assuming ctime and wtime are the same for simplicity
-                    files_in_root.append(AnxFile(
-                        file_name,
-                        file_path_on_device,
-                        is_dir=False,
-                        size=book_meta.size,
-                        ctime=ctime,
-                        wtime=wtime
-                    ))
-            results.append((path, files_in_root))
-        
-        # If a specific directory like '/books' is requested and not recursing
-        elif path.endswith('/books') or path.endswith('/books/'):
-            files_in_books = []
-            for book_uuid, book_meta in self.books_in_device.items(): # Iterate over USBMS's books_in_device
-                file_name = os.path.basename(book_meta.path)
-                file_path_on_device = os.path.join(path, file_name)
-                # For USBMS.Book objects, datetime is a time.struct_time, already a tuple
-                ctime = time.mktime(book_meta.datetime) if book_meta.datetime else 0
-                wtime = ctime # Assuming ctime and wtime are the same for simplicity
-                files_in_books.append(AnxFile(
-                    file_name,
-                    file_path_on_device,
-                    is_dir=False,
-                    size=book_meta.size,
-                    ctime=ctime,
-                    wtime=wtime
-                ))
-                results.append((path, files_in_books))
-            
-        return results
 
     def do_user_manual(self, gui):
         self.gui.job_manager.show_message('ANX Device Plugin: Manage ebooks in your custom ANX folder structure. Configure the device path in Calibre Preferences -> Plugins -> Device Plugins -> ANX Virtual Device -> Customize plugin.')
