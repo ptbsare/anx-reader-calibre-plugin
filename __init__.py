@@ -744,8 +744,8 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 fmt = os.path.splitext(src_path)[1].lstrip('.').lower()
                 if not fmt:
                     fmt = 'epub'
-                # Ensure the filename is based on safe title and author, preserving UTF-8
-                filename = f"{title} - {author}.{fmt}"
+                # Ensure the filename is based on safe title and author, preserving UTF-8, and handle length
+                filename = self._get_safe_filename(title, author, fmt)
                 dest_file_path = os.path.join(self.file_dir, filename)
                 
                 os.makedirs(self.file_dir, exist_ok=True)
@@ -832,8 +832,9 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
 
                 dest_cover_path = "" # Initialize dest_cover_path
                 if cover_data_to_write:
-                    # Use safe_filename for cover filename as well
-                    cover_filename = f"{title} - {author}{cover_extension}"
+                    # Use _get_safe_filename for cover filename as well
+                    # For cover, we pass the extension as fmt to _get_safe_filename
+                    cover_filename = self._get_safe_filename(title, author, cover_extension.lstrip('.'))
                     dest_cover_path = os.path.join(self.cover_dir, cover_filename)
                     
                     try:
@@ -1137,7 +1138,33 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
             except Exception as e:
                 default_log.error(f"ANX Device: Error in add_books_to_metadata for location {full_file_path}: {e}", exc_info=True)
 
-
+    def _get_safe_filename(self, title, author, fmt, max_len=200):
+        # Generate a base filename from title and author
+        base_filename = f"{title} - {author}"
+        
+        # Get the extension with a leading dot
+        ext = f".{fmt}" if fmt else ""
+        
+        # Calculate available length for the base name
+        available_len = max_len - len(ext)
+        
+        if available_len < 1: # Ensure there's at least some space for the base name
+            available_len = 1
+        
+        # Truncate the base filename if it's too long
+        if len(base_filename) > available_len:
+            # For simplicity, we'll just truncate from the end
+            base_filename = base_filename[:available_len]
+            
+        # Combine truncated base filename with extension
+        full_filename = f"{base_filename}{ext}"
+        
+        # Replace any characters that are not allowed in filenames
+        # This is a basic sanitization. Calibre's internal safe_filename might be more robust.
+        # For simplicity, we'll replace common problematic characters with underscores.
+        full_filename = re.sub(r'[<>:"/\\|?*]', '_', full_filename)
+        
+        return full_filename
 
 class Opts:
     def __init__(self, format_map):
