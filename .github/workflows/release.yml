@@ -17,7 +17,7 @@
            zip -r python_files.zip . -i '*.py' -x '*__pycache__*' '*.venv*' '*/env/*'
 
        - name: Upload Release Asset
-         uses: softprops/action-gh-release@v1
+         uses: softprops/action-gh-release@v2
          with:
            files: anx-reader-calibre-plugin.zip
          env:
