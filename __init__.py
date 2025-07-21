@@ -452,8 +452,11 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 # Use the absolute paths directly from USBMSBook's attributes
                 book_path = book_to_delete.path
                 cover_meta = book_to_delete.get_user_metadata('#anx_cover_path', make_copy=False)
-                cover_path = cover_meta.get('#value#') if isinstance(cover_meta, dict) else None
-                self.log.debug(f"ANX Device: Found book in cache. Path: {book_path}, Cover Path (from user metadata): {cover_path}")
+                cover_path_rel = cover_meta.get('#value#') if isinstance(cover_meta, dict) else None
+                
+                # Construct the full absolute path for the cover file
+                cover_path = os.path.join(self.base_dir, 'data', os.path.normpath(cover_path_rel)) if cover_path_rel else None
+                self.log.debug(f"ANX Device: Found book in cache. Path: {book_path}, Cover Path (absolute): {cover_path}")
 
                 # Delete file
                 if os.path.exists(book_path):
