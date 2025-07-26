@@ -1,4 +1,4 @@
-k-- anx_device_plugin/create_db.sql
+-- anx_device_plugin/create_db.sql
 -- SQL script to create the database7.db and tb_books table
 
 CREATE TABLE IF NOT EXISTS tb_books (
@@ -35,3 +35,11 @@ CREATE TABLE IF NOT EXISTS tb_books (
 --     0,
 --     'This is an example book.'
 -- );
+
+-- SQL script to create the tb_reading_time table
+CREATE TABLE tb_reading_time  (
+    id INTEGER PRIMARY KEY,
+    book_id INTEGER,
+    date TEXT,
+    reading_time INTEGER
+)

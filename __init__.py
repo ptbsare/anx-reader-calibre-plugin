@@ -482,7 +482,11 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
 
                     if anx_db_id is not None:
                         cursor.execute("DELETE FROM tb_books WHERE id = ?", (anx_db_id,))
-                        self.log.debug(f"ANX Device: Deleted book with ANX DB ID {anx_db_id} from database.")
+                        self.log.debug(f"ANX Device: Deleted entries for book with ANX DB ID {anx_db_id} from tb_books.")
+                        cursor.execute("DELETE FROM tb_reading_time WHERE book_id = ?", (anx_db_id,))
+                        self.log.debug(f"ANX Device: Deleted entries for book with ANX DB ID {anx_db_id} from tb_reading_time.")
+                        cursor.execute("DELETE FROM tb_notes WHERE book_id = ?", (anx_db_id,))
+                        self.log.debug(f"ANX Device: Deleted entries for book with ANX DB ID {anx_db_id} from tb_notes.")
                         # Remove from in-memory cache and booklist directly
                         if book.uuid in self.books_in_device:
                             del self.books_in_device[book.uuid]
