@@ -251,7 +251,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 SELECT id, title, author, file_path, cover_path, file_md5,
                        create_time, update_time, last_read_position,
                        reading_percentage, is_deleted, rating, group_id, description
-                FROM tb_books ;
+                FROM tb_books WHERE is_deleted != 1;
             """)
             
             for row in cursor.fetchall():
@@ -481,12 +481,13 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                     anx_db_id = book.get('#anx_db_id') # Use .get() method
 
                     if anx_db_id is not None:
-                        cursor.execute("DELETE FROM tb_books WHERE id = ?", (anx_db_id,))
-                        self.log.debug(f"ANX Device: Deleted entries for book with ANX DB ID {anx_db_id} from tb_books.")
-                        cursor.execute("DELETE FROM tb_reading_time WHERE book_id = ?", (anx_db_id,))
-                        self.log.debug(f"ANX Device: Deleted entries for book with ANX DB ID {anx_db_id} from tb_reading_time.")
-                        cursor.execute("DELETE FROM tb_notes WHERE book_id = ?", (anx_db_id,))
-                        self.log.debug(f"ANX Device: Deleted entries for book with ANX DB ID {anx_db_id} from tb_notes.")
+                        current_time = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                        cursor.execute("UPDATE tb_books SET is_deleted = 1, update_time = ? WHERE id = ?", (current_time, anx_db_id))
+                        self.log.debug(f"ANX Device: Updata entries for book with ANX DB ID {anx_db_id} from tb_books.")
+                        #cursor.execute("DELETE FROM tb_reading_time WHERE book_id = ?", (anx_db_id,))
+                        #self.log.debug(f"ANX Device: Deleted entries for book with ANX DB ID {anx_db_id} from tb_reading_time.")
+                        #cursor.execute("DELETE FROM tb_notes WHERE book_id = ?", (anx_db_id,))
+                        #self.log.debug(f"ANX Device: Deleted entries for book with ANX DB ID {anx_db_id} from tb_notes.")
                         # Remove from in-memory cache and booklist directly
                         if book.uuid in self.books_in_device:
                             del self.books_in_device[book.uuid]
@@ -848,13 +849,49 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 cursor = conn.cursor()
                 current_time = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
-                cursor.execute("SELECT id FROM tb_books WHERE file_md5 = ?;", (file_md5,))
+                cursor.execute("SELECT id, is_deleted, file_path FROM tb_books WHERE file_md5 = ?;", (file_md5,))
                 existing_book = cursor.fetchone()
 
                 if existing_book:
-                    self.log.debug(f"Book '{title}' with MD5 '{file_md5}' already exists in device DB. Skipping insert.")
-                    conn.close()
-                    continue
+                    existing_id, is_deleted, file_path_rel_from_db = existing_book
+                    # Case 1: MD5 exists and is_deleted is 1 (book was soft-deleted)
+                    if is_deleted == 1:
+                        self.log.debug(f"Book '{title}' with MD5 '{file_md5}' exists but is marked as deleted. Reactivating and updating.")
+                        # File has already been copied, so we just update the database record
+                        file_relative_path = os.path.relpath(dest_file_path, os.path.join(self.base_dir, 'data')).replace(os.sep, '/')
+                        
+                        current_time = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                        cursor.execute("""
+                            UPDATE tb_books 
+                            SET is_deleted = 0, update_time = ?, file_path = ?, cover_path = ?
+                            WHERE id = ?;
+                        """, (current_time, file_relative_path, cover_path_rel, existing_id))
+                        conn.commit()
+                        self.log.debug(f"Reactivated book with ID {existing_id}.")
+                        # Continue to the next book
+                        conn.close()
+                        continue
+                    
+                    # Case 2: MD5 exists and is_deleted is 0 (book is active)
+                    else:
+                        full_file_path_on_device = os.path.join(self.base_dir, 'data', os.path.normpath(file_path_rel_from_db))
+                        # Case 2a: File does not exist on disk
+                        if not os.path.exists(full_file_path_on_device):
+                            self.log.debug(f"Book '{title}' with MD5 '{file_md5}' exists, but file is missing. Replacing file.")
+                            # The file has already been copied to dest_file_path by this point.
+                            # We just need to ensure the DB path is correct if it changed.
+                            file_relative_path = os.path.relpath(dest_file_path, os.path.join(self.base_dir, 'data')).replace(os.sep, '/')
+                            if file_relative_path != file_path_rel_from_db:
+                                current_time = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                                cursor.execute("UPDATE tb_books SET file_path = ?, update_time = ? WHERE id = ?", (file_relative_path, current_time, existing_id))
+                                conn.commit()
+                            # We don't need to do anything else, the file is now where it should be.
+                        # Case 2b: File exists on disk
+                        else:
+                            self.log.warning(f"Book '{title}' with MD5 '{file_md5}' already exists and file is present. Skipping as duplicate.")
+                        
+                        conn.close()
+                        continue
                 
                 file_relative_path = os.path.relpath(dest_file_path, os.path.join(self.base_dir, 'data')).replace(os.sep, '/')
                 
