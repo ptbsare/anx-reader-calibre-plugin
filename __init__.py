@@ -24,7 +24,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
     icon = 'devices/tablet.png'
     description         = 'Connects to a custom folder structure with a database7.db file for managing ebooks.'
     author              = 'Gemini AI based on user script'
-    version             = (1, 0, 0)
+    version             = (1, 0, 1)
     supported_platforms = ['windows', 'osx', 'linux']
     capabilities        = frozenset(['send_books', 'delete_books', 'has_user_manual'])
     FORMATS             = ["epub", "mobi", "azw3", "fb2", "txt", "pdf"]
@@ -868,7 +868,39 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                         """, (current_time, file_relative_path, cover_path_rel, existing_id))
                         conn.commit()
                         self.log.debug(f"Reactivated book with ID {existing_id}.")
-                        # Continue to the next book
+
+                        # After reactivating, we must add it to the booklist to update the UI
+                        cursor.execute("""
+                            SELECT id, title, author, file_path, cover_path, file_md5,
+                                   create_time, update_time, last_read_position,
+                                   reading_percentage, is_deleted, rating, group_id, description
+                            FROM tb_books WHERE id = ?;
+                        """, (existing_id,))
+                        
+                        row = cursor.fetchone()
+                        if row:
+                            (book_id, title, author, file_path_rel, cover_path_rel, file_md5,
+                             create_time, update_time, last_read_position,
+                             reading_percentage, is_deleted, rating, group_id, description) = row
+
+                            full_file_path = os.path.join(self.base_dir, 'data', os.path.normpath(file_path_rel))
+                            full_cover_path = os.path.join(self.base_dir, 'data', os.path.normpath(cover_path_rel)) if cover_path_rel else None
+                            file_size = os.path.getsize(full_file_path) if os.path.exists(full_file_path) else 0
+                            file_mtime = datetime.fromtimestamp(os.path.getmtime(full_file_path)) if os.path.exists(full_file_path) else datetime.utcnow()
+
+                            book_info = {
+                                'book_id': book_id, 'title': title, 'author': author,
+                                'file_path_rel': file_path_rel, 'cover_path_rel': cover_path_rel,
+                                'file_md5': file_md5, 'create_time': create_time, 'update_time': update_time,
+                                'last_read_position': last_read_position, 'reading_percentage': reading_percentage,
+                                'is_deleted': is_deleted, 'rating': rating, 'group_id': group_id,
+                                'description': description, 'full_file_path': full_file_path,
+                                'full_cover_path': full_cover_path, 'file_size': file_size,
+                                'file_mtime': file_mtime, 'fmt': fmt
+                            }
+                            locations.append((full_file_path, None, book_info))
+                            sent_count += 1 # Increment sent_count as it's a successful "upload"
+
                         conn.close()
                         continue
                     
