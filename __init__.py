@@ -24,7 +24,7 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
     icon = 'devices/tablet.png'
     description         = 'Connects to a custom folder structure with a database7.db file for managing ebooks.'
     author              = 'Gemini AI based on user script'
-    version             = (1, 0, 1)
+    version             = (1, 0, 2)
     supported_platforms = ['windows', 'osx', 'linux']
     capabilities        = frozenset(['send_books', 'delete_books', 'has_user_manual'])
     FORMATS             = ["epub", "mobi", "azw3", "fb2", "txt", "pdf"]
@@ -676,6 +676,10 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 for user_meta_key, (db_field_name, db_current_value, data_type) in fields_to_check.items():
                     user_meta_val = book_obj.get(user_meta_key) # Use .get() method
                     
+                    # Convert rating from Calibre's 0-10 to ANX's 0-5
+                    #if db_field_name == 'rating' and user_meta_val is not None:
+                    #    user_meta_val = float(user_meta_val) / 2
+                    
                     # Type conversion for comparison
                     if data_type == 'float' and user_meta_val is not None:
                         try:
@@ -935,6 +939,8 @@ class AnxDevicePlugin(USBMS): # Change base class to USBMS
                 reading_percentage = book_data.get('reading_percentage', 0.0)
                 is_deleted = book_data.get('is_deleted', 0)
                 rating = book_data.get('rating', 0.0)
+                # Convert Calibre's 0-10 rating to ANX's 0-5 rating
+                rating = rating / 2 if rating else 0.0
                 group_id = book_data.get('group_id', 0)
                 description = book_data.get('description', '')
 
